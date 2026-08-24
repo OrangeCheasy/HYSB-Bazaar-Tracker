@@ -12,8 +12,13 @@
 		"directory": "./dist/client",
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application",
+		// "/__scheduled" is what `wrangler dev --test-scheduled` posts cron events to.
+		// Without it here, the asset router answers first and not_found_handling serves
+		// index.html, so the scheduled handler never runs and local cron testing silently
+		// does nothing. In production the path is unused and falls through to assets.
 		"run_worker_first": [
-			"/api/*"
+			"/api/*",
+			"/__scheduled*"
 		]
 	},
 	"observability": {

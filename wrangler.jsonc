@@ -1,0 +1,56 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "orangecheasy",
+  "main": "./src/worker/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "observability": {
+    "enabled": true
+  },
+
+  "triggers": {
+    "crons": [
+      "*/5 * * * *",
+      "7 * * * *",
+      "23 4 * * *"
+    ]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bazaar",
+      "database_id": "REPLACE_ME_AFTER_wrangler_d1_create",
+      "migrations_dir": "./migrations"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
+    }
+  ],
+
+  "vars": {
+    "ENVIRONMENT": "production",
+    "HYPIXEL_BAZAAR_URL": "https://api.hypixel.net/v2/skyblock/bazaar"
+  },
+
+  "env": {
+    "preview": {
+      "name": "orangecheasy-preview",
+      "vars": {
+        "ENVIRONMENT": "preview"
+      }
+    }
+  }
+}

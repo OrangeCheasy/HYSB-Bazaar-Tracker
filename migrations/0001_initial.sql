@@ -12,6 +12,8 @@ CREATE TABLE products (
   last_seen     INTEGER NOT NULL
 );
 
+-- No FK to products(tag) on purpose: recipes are seeded by hand before ingest has ever
+-- populated products, and a recipe for a delisted item is still worth keeping around.
 CREATE TABLE recipes (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   base_tag     TEXT NOT NULL,
@@ -76,6 +78,8 @@ CREATE TABLE daily (
   PRIMARY KEY (tag, day_ts)
 ) WITHOUT ROWID;
 
+CREATE INDEX idx_daily_day_ts ON daily (day_ts);
+
 -- You cannot debug a cron you cannot see.
 CREATE TABLE runs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,4 +91,6 @@ CREATE TABLE runs (
   error         TEXT
 );
 
-CREATE INDEX idx_runs_started ON runs (started_at DESC);
+-- Composite, not (started_at) alone: the query you actually run is "last N ingest runs",
+-- which needs kind as the leading column.
+CREATE INDEX idx_runs_kind_started ON runs (kind, started_at DESC);

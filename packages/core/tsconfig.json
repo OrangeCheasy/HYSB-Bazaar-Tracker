@@ -1,0 +1,11 @@
+{
+  // No "types" and no DOM lib, deliberately. packages/core must never reach for
+  // cloudflare:*, node:*, or fetch. If a platform global ever typechecks in here,
+  // this file is the reason it should not have.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": []
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

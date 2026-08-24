@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # If the inversion test in packages/core/test/sides.test.ts fails, the site would
+      # print backwards profit numbers. Deploying past a red test is not an option.
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build

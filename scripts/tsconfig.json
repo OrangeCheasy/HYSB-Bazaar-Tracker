@@ -1,0 +1,10 @@
+{
+  // scripts/ runs under Node locally, not in the Worker runtime. Kept separate so Node
+  // globals never typecheck inside src/worker.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

@@ -46,13 +46,43 @@ export function errorResponse(message: string, status: number): Response {
 }
 
 /**
+ * Wraps a route in Cloudflare's edge Cache API (ROADMAP Phase 4: "use the Cache API for
+ * history ranges"). `Cache-Control` headers alone don't get a Worker's own `/api/*`
+ * routes cached at the edge — that only happens via an explicit `caches.default` call or
+ * a zone cache rule, neither of which existed here before.
+ *
+ * `caches` is a Workers-runtime global with no Node equivalent, so it is undefined under
+ * plain vitest (see vitest.config.ts — no workers pool). Feature-detecting it lets this
+ * degrade to "just compute" in tests instead of every history-route test needing a fake.
+ */
+async function withEdgeCache(
+  request: Request,
+  ctx: ExecutionContext,
+  compute: () => Promise<Response>,
+): Promise<Response> {
+  if (typeof caches === "undefined") return compute();
+
+  const cache = caches.default;
+  const cacheKey = new Request(request.url, { method: "GET" });
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+
+  const response = await compute();
+  if (response.ok) {
+    // waitUntil: the cache write must not delay the response the caller is waiting on.
+    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  }
+  return response;
+}
+
+/**
  * Route handlers are thin: parse the request, read KV or D1, shape the envelope.
  * Business logic belongs in packages/core, SQL belongs in src/worker/db.
  */
 export async function handleApi(
   request: Request,
   env: Env,
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
 
@@ -96,7 +126,9 @@ export async function handleApi(
   }
 
   if (segments.length === 4 && segments[1] === "item" && segments[3] === "history") {
-    return handleItemHistory(decodeURIComponent(segments[2] ?? ""), url, env);
+    return withEdgeCache(request, ctx, () =>
+      handleItemHistory(decodeURIComponent(segments[2] ?? ""), url, env),
+    );
   }
 
   if (segments.length === 4 && segments[1] === "item" && segments[3] === "hours") {

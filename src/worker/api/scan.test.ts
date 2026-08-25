@@ -45,3 +45,53 @@ describe("handleScan — stale data", () => {
     expect(body.data).toEqual([]);
   });
 });
+
+describe("handleScan — query parameter validation", () => {
+  const badRequest = async (query: string) => {
+    const kv = makeFakeKV({});
+    const env = makeFakeEnv({ kv, db: makeQueuedFakeD1({ all: [[]] }) });
+    const res = await handleScan(new URL(`https://bazaar.example/api/scan?${query}`), env);
+    const body = (await res.json()) as { error?: string };
+    return { status: res.status, error: body.error ?? "" };
+  };
+
+  // The failure this exists to prevent: `tax` is a fraction, so a UI (or a user) that
+  // sends "1.25" meaning 1.25% asks for a 125% sell tax. Unvalidated, that renders every
+  // craft as a large, confident, wrong loss — the exact opposite of CLAUDE.md section
+  // 7.6's "estimates, not advice, and never a bare number".
+  it("rejects a tax rate given as a percent instead of a fraction", async () => {
+    const { status, error } = await badRequest("tax=1.25");
+    expect(status).toBe(400);
+    expect(error).toContain("tax");
+    expect(error).toContain("0.0125"); // the message names the correct form
+  });
+
+  it("rejects a negative tax rather than silently substituting the default", async () => {
+    expect((await badRequest("tax=-0.5")).status).toBe(400);
+  });
+
+  it("rejects a capture fraction above 1", async () => {
+    expect((await badRequest("capture=5")).status).toBe(400);
+  });
+
+  it("rejects an hour outside 0-23 and a sell window outside 1-24", async () => {
+    expect((await badRequest("sleepStart=25")).status).toBe(400);
+    expect((await badRequest("window=100")).status).toBe(400);
+  });
+
+  it("rejects a non-numeric value instead of falling back to the default", async () => {
+    const { status, error } = await badRequest("tax=abc");
+    expect(status).toBe(400);
+    expect(error).toContain("must be a number");
+  });
+
+  it("accepts in-range values, including the real Mayor Aura tax of 2.25%", async () => {
+    const kv = makeFakeKV({});
+    const env = makeFakeEnv({ kv, db: makeQueuedFakeD1({ all: [[]] }) });
+    const res = await handleScan(
+      new URL("https://bazaar.example/api/scan?tax=0.0225&capture=0.5&window=6"),
+      env,
+    );
+    expect(res.status).toBe(200);
+  });
+});

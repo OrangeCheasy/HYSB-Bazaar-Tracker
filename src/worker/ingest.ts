@@ -65,8 +65,32 @@ export function normalizeProduct(
   });
 }
 
+/** The five-minute ingest cron's period. Every row a tick writes is stamped with the tick
+ *  BOUNDARY rather than the wall clock, so that two deliveries of the same tick land on
+ *  the same primary key and collapse via UPSERT.
+ *
+ *  This is load-bearing, not cosmetic. On 2026-08-25 Cloudflare delivered every cron
+ *  twice, ~55s apart, for three and a half hours. Wall-clock stamps gave the two
+ *  deliveries different `ts` values, so nothing collided: `snapshots` took two rows per
+ *  tag per tick and `hourly.samples` counted 24 where it should have counted 12 — the
+ *  one number CLAUDE.md section 3b relies on to stay honest. Quantizing makes a repeat
+ *  delivery a no-op (`buildHourlyIncrementalUpsert`'s `last_tick_ts <` guard only fires
+ *  when the repeat carries the SAME tickTs) and keeps the series evenly spaced, which
+ *  stats.ts and profile.ts both assume. */
+const TICK_SECONDS = 300;
+
+/** Exported for the regression test: the 2026-08-25 duplicate-delivery pair must map to
+ *  one boundary. Inlining this back into `runIngest` as `Date.now()` is the mistake this
+ *  guards against. */
+export function tickBoundary(epochSeconds: number): number {
+  return Math.floor(epochSeconds / TICK_SECONDS) * TICK_SECONDS;
+}
+
 export async function runIngest(env: Env): Promise<void> {
   const startedAt = Math.floor(Date.now() / 1000);
+  // `startedAt` stays wall-clock for `runs` bookkeeping — when a tick actually executed
+  // is exactly what an operator needs to see there. Only the DATA is quantized.
+  const tickTs = tickBoundary(startedAt);
   const t0 = Date.now();
 
   try {
@@ -77,7 +101,7 @@ export async function runIngest(env: Env): Promise<void> {
     const entries = Object.entries(data.products);
 
     const { ok: normalized, skipped } = normalizeMany(entries, (entry) =>
-      normalizeProduct(entry, startedAt),
+      normalizeProduct(entry, tickTs),
     );
 
     // Tier A = recipe tags (base_tag UNION ench_tag) plus top ~500 by sellMovingWeek,
@@ -97,7 +121,7 @@ export async function runIngest(env: Env): Promise<void> {
     const productRows: ProductRow[] = [];
     const snapshotRows: SnapshotRow[] = [];
     const hourlyRows: HourlyIncrementalRow[] = [];
-    const hourTs = Math.floor(startedAt / 3600) * 3600;
+    const hourTs = Math.floor(tickTs / 3600) * 3600;
 
     for (const p of normalized) {
       const tier = tierA.has(p.tag) ? "A" : "B";
@@ -105,13 +129,13 @@ export async function runIngest(env: Env): Promise<void> {
         tag: p.tag,
         isEnchanted: p.tag.startsWith("ENCHANTED_"),
         tier,
-        ts: startedAt,
+        ts: tickTs,
       });
 
       if (tier === "A") {
         snapshotRows.push({
           tag: p.tag,
-          ts: startedAt,
+          ts: tickTs,
           ask: p.point.ask,
           bid: p.point.bid,
           askDepth: p.point.askDepth,
@@ -137,7 +161,7 @@ export async function runIngest(env: Env): Promise<void> {
           bidDepth: p.point.bidDepth,
           ibWeek: p.point.ibWeek,
           isWeek: p.point.isWeek,
-          tickTs: startedAt,
+          tickTs,
         });
       }
     }
@@ -159,7 +183,7 @@ export async function runIngest(env: Env): Promise<void> {
       rowsWritten += hourlyRows.length;
     }
 
-    await writeTickArchive(env, startedAt, rawJson);
+    await writeTickArchive(env, tickTs, rawJson);
 
     // Skips are expected, routine behaviour (ROADMAP Phase 2: "a product with a missing
     // quick_status must be skipped, not fatal"), not run failures — recordRun's `error`

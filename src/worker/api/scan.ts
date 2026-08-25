@@ -1,7 +1,7 @@
 import { SCAN_KV_KEY } from "../precompute.js";
 import { isDefaultScanParams, parseScanQueryParams, runScan } from "../scan.js";
 import type { Env } from "../index.js";
-import { json, type Meta } from "./index.js";
+import { errorResponse, json, type Meta } from "./index.js";
 
 interface CachedScanPayload {
   readonly data: unknown;
@@ -21,7 +21,10 @@ interface CachedScanPayload {
  * every request (ROADMAP Phase 4).
  */
 export async function handleScan(url: URL, env: Env): Promise<Response> {
-  const { params, capitalAvailable } = parseScanQueryParams(url);
+  const parsed = parseScanQueryParams(url);
+  // 400, not a clamp and not a silent fall back to the default: see parseScanQueryParams.
+  if (!parsed.ok) return errorResponse(parsed.error, 400);
+  const { params, capitalAvailable } = parsed.value;
 
   if (isDefaultScanParams(params, capitalAvailable)) {
     const raw = await env.CACHE.get(SCAN_KV_KEY);

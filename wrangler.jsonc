@@ -40,11 +40,17 @@
 			"migrations_dir": "./migrations"
 		}
 	],
+	// No "remote": true here, deliberately. With it, `wrangler dev` reads AND WRITES the
+	// production KV namespace — on 2026-08-25 a dev session left a junk scan payload in
+	// production that `/api/scan` then served for hours. KV is written by cron only
+	// (CLAUDE.md section 3), so local dev has no business writing it. Local dev gets an
+	// empty namespace and /api/scan takes its live-D1 fallback, which is the path worth
+	// exercising locally anyway. Re-add the flag only for a deliberate read-only check,
+	// and remove it again afterwards.
 	"kv_namespaces": [
 		{
 			"binding": "CACHE",
-			"id": "e80f2459ff5d4b32b14270ee2cf0eaa0",
-			"remote": true
+			"id": "e80f2459ff5d4b32b14270ee2cf0eaa0"
 		}
 	],
 	// Bucket must exist before this binding works: `npx wrangler r2 bucket create

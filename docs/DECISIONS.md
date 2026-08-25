@@ -425,3 +425,100 @@ having regardless of whether profiling needs seeding. Until it exists, `runs` an
 to defer — `hourly.source` already exists with default `'hypixel'`
 (`migrations/0001_initial.sql`), so coflnet rows drop in later with no migration and
 stay distinguishable from our own.
+
+---
+
+## ADR-018 — Ingest stamps the tick boundary, not the wall clock
+
+**Date:** 2026-08-25 · **Status:** accepted
+
+Every row an ingest tick writes — `products.ts`, `snapshots.ts`, the `hourly` row's
+`last_tick_ts`, and the R2 archive key — is now stamped `floor(now / 300) * 300` rather
+than `now`. `runs.started_at` deliberately keeps the wall clock: when a tick actually
+executed is exactly what an operator needs to see there. Only the data is quantized.
+
+Forced by a real incident. From 2026-08-25 18:10 to roughly 21:40, Cloudflare delivered
+every cron **twice**, about 55 seconds apart — confirmed in observability logs as two
+distinct `requestId`s with two distinct `scheduledTime`s on one cron expression and one
+script version. It stopped on its own, without a redeploy, and the mechanism was never
+established.
+
+ROADMAP Phase 2 already required "a retry at the same timestamp upserts, never
+duplicates", and `buildHourlyIncrementalUpsert` already carried a `last_tick_ts <
+excluded.last_tick_ts` guard for exactly this. Wall-clock stamps defeated both: the
+second delivery arrived with a *later* timestamp, so it was never the "same timestamp"
+the invariant was written about. `snapshots` took two rows per tag per tick and
+`hourly.samples` reported 24 where the truth was 12 — the single number CLAUDE.md
+section 3b relies on to expose thin data rather than average it away.
+
+Quantizing repairs both paths at once with no schema change: a repeat delivery collides
+on `(tag, ts)` and collapses via UPSERT, and the `last_tick_ts <` guard finally fires
+because the repeat now carries the same value. It also makes the series evenly spaced,
+which `stats.ts` and `profile.ts` both quietly assume.
+
+**Cost:** a tick that fires *early* — before its boundary — would be attributed to the
+previous window and overwrite it. Cloudflare's scheduler runs late, not early (observed
+offsets were +4s to +12s), so this is theoretical, but it is the failure mode to look for
+if a tick ever goes missing.
+
+`tickBoundary` is exported purely so the regression test can assert the incident's real
+timestamp pair (21:15:04 and 21:15:59) maps to one boundary. Inlining it back to
+`Date.now()` is the mistake that test exists to catch.
+
+---
+
+## ADR-019 — Scan parameters are rejected, not clamped or defaulted
+
+**Date:** 2026-08-25 · **Status:** accepted
+
+`parseScanQueryParams` now returns a typed result and `/api/scan` and `/api/craft/:tag`
+answer 400 with a message naming the parameter and its range. Previously any finite
+number was accepted and anything unparseable fell back to the default.
+
+The specific trap is `tax`, which is a **fraction**: `?tax=1.25` meaning "1.25%" asks for
+a 125% sell tax. Unvalidated, that returns 200 with every craft showing a large,
+confident, wrong loss — indistinguishable from a real market signal. A UI that sends
+percents would poison every number on the page with nothing in the response indicating
+anything went wrong. It was found by accident, by passing `tax=1.5` while testing the
+live D1 path.
+
+Three options were considered: clamp to range, fall back to the default, or reject.
+Rejecting is the only one that cannot silently answer a question the user did not ask.
+Falling back is the worst of the three — it returns numbers computed at 1.25% to someone
+who asked for something else, with no signal. This is the same reasoning as CLAUDE.md
+section 7.6: a scan figure is something a person may act on with real coins, so it never
+ships without its caveats, and it certainly never ships computed from inputs quietly
+swapped underneath it.
+
+Ranges are wider than reality (`tax` allows up to 0.5 where the real ceiling is 0.0225
+under Mayor Aura) — the job is to catch inputs wrong by a *factor*, not to second-guess
+someone modelling an unusual scenario. `capital` is absent-vs-present rather than
+range-checked: no `capital` means "unconstrained", which is a different scan from one
+constrained to 0 coins.
+
+---
+
+## ADR-020 — Local dev does not bind the production KV namespace
+
+**Date:** 2026-08-25 · **Status:** accepted
+
+`"remote": true` is removed from the `CACHE` binding in `wrangler.jsonc`.
+
+With it set, `wrangler dev` reads **and writes** the production KV namespace. On
+2026-08-25 that is exactly what happened: a local dev session wrote `scan:default:v1` at
+18:36, when `hourly` held barely any data, and production served that payload — 42
+recipes all reporting `no-base-data` — for hours afterwards. Nothing in `runs` showed a
+problem, because no cron had written it; the deployed `precompute` at the time was still
+the stub. The API behaved correctly throughout, honestly labelling the payload stale
+(CLAUDE.md section 5), which is the only reason it was noticeable at all.
+
+CLAUDE.md section 3 already says KV holds precomputed payloads written by cron and never
+per-request writes. A dev session is even further from "written by cron" than a request
+handler is. Local dev now gets an empty namespace, and `/api/scan` takes its live-D1
+fallback — the path worth exercising locally anyway, since it is what production serves
+before the first successful precompute of any new deploy.
+
+**Cost:** you can no longer inspect real precomputed payloads from `wrangler dev`. Read
+them with `wrangler kv key get` instead, or re-add the flag deliberately for one session
+and remove it again. The failure this prevents is silent and production-visible; the
+inconvenience it creates is neither.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isWellFormed } from "@core/index.js";
-import { normalizeProduct, type RawBazaarResponse } from "./ingest.js";
+import { normalizeProduct, tickBoundary, type RawBazaarResponse } from "./ingest.js";
 // A real Hypixel response, captured once during Phase 0.5/2. Worker code (and its
 // tests) must never call api.hypixel.net directly outside the scheduled handler
 // (CLAUDE.md section 2) — a plain JSON import keeps this test entirely offline, and
@@ -79,5 +79,28 @@ describe("normalizeProduct against a real Hypixel fixture", () => {
     // "missing"), not pinning today's exact numbers.
     expect(missing).toBeLessThan(entries.length);
     expect(crossed).toBeLessThan(entries.length * 0.05);
+  });
+});
+
+describe("tickBoundary — duplicate cron delivery must not create a second row", () => {
+  // The real incident: on 2026-08-25 Cloudflare delivered every cron twice, ~55s apart,
+  // for three and a half hours. Wall-clock stamps gave the two deliveries different `ts`
+  // values, so `snapshots` took two rows per tag per tick and `hourly.samples` counted
+  // 24 instead of 12. Stamping the tick boundary is what makes the repeat collapse.
+  it("maps both deliveries of one tick to the same timestamp", () => {
+    const first = 1_787_692_505; // 21:15:04 UTC, scheduledTime 21:15:04
+    const second = 1_787_692_559; // 21:15:59 UTC, second delivery of the SAME tick
+    expect(tickBoundary(first)).toBe(tickBoundary(second));
+    expect(tickBoundary(first) % 300).toBe(0);
+  });
+
+  it("still separates genuinely different ticks", () => {
+    expect(tickBoundary(1_787_692_505)).not.toBe(tickBoundary(1_787_692_805)); // 21:15 vs 21:20
+  });
+
+  it("keeps the series evenly spaced, which stats.ts and profile.ts assume", () => {
+    const late = [1_787_692_504, 1_787_692_808, 1_787_693_101].map(tickBoundary);
+    expect(late[1]! - late[0]!).toBe(300);
+    expect(late[2]! - late[1]!).toBe(300);
   });
 });

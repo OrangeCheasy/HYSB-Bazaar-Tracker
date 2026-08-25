@@ -1,5 +1,5 @@
 /**
- * Local-only backfill seed. Phase 6.
+ * Local-only backfill seed. ROADMAP Phase 3 (deferred — see DECISIONS.md ADR-017).
  *
  * Usage: npm run backfill -- --tag COAL --days 30
  *
@@ -35,4 +35,4 @@ function parseArgs(argv: string[]): { tag: string; days: number } {
 
 const { tag, days } = parseArgs(process.argv.slice(2));
 
-console.log(`backfill ${tag} over ${days}d: not implemented yet (Phase 6)`);
+console.log(`backfill ${tag} over ${days}d: not implemented yet (ROADMAP Phase 3)`);

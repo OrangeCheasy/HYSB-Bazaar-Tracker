@@ -227,19 +227,53 @@ export async function runScan(
   };
 }
 
+/** Allowed range for each query parameter, with the message shown when it is missed.
+ *  Ranges are deliberately wider than reality (real sell tax tops out near 2.25% under
+ *  Mayor Aura) — the job here is to catch inputs that are wrong by a FACTOR, not to
+ *  second-guess a user who wants to model something unusual. */
+const PARAM_RANGES = {
+  // The percent-vs-fraction trap: `?tax=1.25` meaning "1.25%" is 100x too big and,
+  // unvalidated, renders every craft as a catastrophic loss with no error shown.
+  tax: { min: 0, max: 0.5, hint: "a fraction, so 1.25% is 0.0125" },
+  capture: { min: 0, max: 1, hint: "a fraction of market volume between 0 and 1" },
+  tick: { min: 0.000001, max: 1_000_000, hint: "a positive price step in coins" },
+  sleepStart: { min: 0, max: 23, hint: "an hour of the day, 0-23 UTC" },
+  sleepEnd: { min: 0, max: 23, hint: "an hour of the day, 0-23 UTC" },
+  window: { min: 1, max: 24, hint: "a sell-window length in hours, 1-24" },
+  capital: { min: 0, max: Number.MAX_SAFE_INTEGER, hint: "a non-negative coin amount" },
+} as const;
+
+export type ScanQueryParams = { params: ScanParams; capitalAvailable?: number };
+export type ParseResult =
+  | { readonly ok: true; readonly value: ScanQueryParams }
+  | { readonly ok: false; readonly error: string };
+
 /** Parsed from `?tax=&capture=&tick=&sleepStart=&sleepEnd=&window=&capital=`. Shared by
  *  `/api/scan` and `/api/craft/:baseTag` so the same query string means the same thing
- *  on both (ROADMAP Phase 7: "shareable craft links"). */
-export function parseScanQueryParams(url: URL): {
-  params: ScanParams;
-  capitalAvailable?: number;
-} {
+ *  on both (ROADMAP Phase 7: "shareable craft links").
+ *
+ *  Out-of-range and non-numeric values are rejected rather than clamped or silently
+ *  replaced by the default. A scan is a number someone may act on with real coins
+ *  (CLAUDE.md section 7.6), and quietly substituting a different tax rate than the one
+ *  asked for produces a plausible-looking answer to a question nobody asked. */
+export function parseScanQueryParams(url: URL): ParseResult {
   const sp = url.searchParams;
-  const num = (key: string, fallback: number): number => {
+  let failure: string | undefined;
+
+  const num = (key: keyof typeof PARAM_RANGES, fallback: number): number => {
     const raw = sp.get(key);
-    if (raw === null) return fallback;
+    if (raw === null || raw === "") return fallback;
     const n = Number(raw);
-    return Number.isFinite(n) ? n : fallback;
+    const { min, max, hint } = PARAM_RANGES[key];
+    if (!Number.isFinite(n)) {
+      failure ??= `'${key}' must be a number (${hint}); got '${raw}'`;
+      return fallback;
+    }
+    if (n < min || n > max) {
+      failure ??= `'${key}' must be between ${min} and ${max} — ${hint}; got ${n}`;
+      return fallback;
+    }
+    return n;
   };
 
   const market: MarketConfig = {
@@ -255,11 +289,14 @@ export function parseScanQueryParams(url: URL): {
     sellWindowHours: num("window", DEFAULT_SELL_WINDOW_HOURS),
   };
 
+  // Sentinel rather than a range: absent `capital` means "no capital constraint", which
+  // is a different scan from one constrained to 0 coins.
   const capitalRaw = sp.get("capital");
-  const capitalParsed = capitalRaw === null ? NaN : Number(capitalRaw);
-  const capitalAvailable = Number.isFinite(capitalParsed) ? capitalParsed : undefined;
+  const capitalAvailable =
+    capitalRaw === null || capitalRaw === "" ? undefined : num("capital", 0);
 
-  return { params, capitalAvailable };
+  if (failure !== undefined) return { ok: false, error: failure };
+  return { ok: true, value: { params, capitalAvailable } };
 }
 
 /** True when every scan param is exactly the default — the KV-vs-live-D1 fork in

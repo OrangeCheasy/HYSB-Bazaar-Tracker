@@ -4,6 +4,69 @@ Rewritten 2026-08-25 evening, replacing the pre-deploy version. Delete this file
 everything below is done; it's a session handoff note, not a permanent doc
 (CLAUDE.md/ROADMAP.md/DECISIONS.md are the permanent ones).
 
+## Do these, in this order
+
+1. **Review and ship the fixes.** Uncommitted in the working tree: tick-boundary stamping
+   (`src/worker/ingest.ts`), scan parameter validation (`src/worker/scan.ts`,
+   `api/scan.ts`, `api/craft.ts`), the `CACHE` binding change (`wrangler.jsonc`), ADR-018
+   through ADR-020, and 9 new tests. `npm test` 219 passing, `npm run typecheck` clean.
+   Commit, push, then deploy — the deployment history shows `wrangler` as the source for
+   every deploy so far, so `npm run deploy` is the step that actually ships it, despite
+   CLAUDE.md section 6 saying CI does this.
+
+2. **Confirm the 22:07 precompute succeeded** (the first run under Phase 4 code):
+
+   ```bash
+   npx wrangler d1 execute bazaar --remote --command \
+     "SELECT kind, datetime(started_at,'unixepoch'), duration_ms, error FROM runs \
+      WHERE kind='precompute' ORDER BY id DESC LIMIT 3"
+   ```
+
+   Expect `error` to be NULL. Then check `/api/scan` returns `source: "kv"` with a fresh
+   `generatedAt` and real analyses instead of 42x `no-base-data`.
+
+3. **Decide what to do with the doubled data.** Every row currently in the database was
+   written during the double-cron window: 43,086 snapshot rows covering only 22,545
+   distinct (tag, tick) pairs — about 20,500 duplicates — and all 8,043 `hourly` rows,
+   with `samples` reading up to 24 where the truth is 12.
+
+   Recommendation: **delete it and start clean.** It is roughly four hours of day-one
+   data, and `hourly` is the table kept forever — carrying a permanently wrong `samples`
+   in it is worse than a four-hour hole at the very start of history, because `samples`
+   is the signal that tells the API when not to trust a row (CLAUDE.md section 3b).
+
+   ```bash
+   npx wrangler d1 execute bazaar --remote --command "DELETE FROM hourly; DELETE FROM snapshots;"
+   ```
+
+   Do this **after** step 1 is deployed, so the next tick refills with quantized
+   timestamps. Leave `products` and `recipes` alone. The ~51k deletes count against the
+   50M rows/month allowance and are not worth worrying about.
+
+   If you would rather keep it, the data is not wrong — averages are unbiased, some
+   minutes just carry double weight — but write down that `samples` for 2026-08-25
+   18:00-21:00 is inflated 2x, because nothing in the schema will tell you later.
+
+4. **Watch for the doubling coming back after step 1's deploy.** It appeared at one
+   deploy and vanished ~3.5 hours later without one, so a redeploy is a plausible trigger
+   and nothing is understood well enough to rule it out. Twelve ingests per hour is
+   correct:
+
+   ```bash
+   npx wrangler d1 execute bazaar --remote --command \
+     "SELECT strftime('%Y-%m-%d %H', started_at,'unixepoch') hr, COUNT(*) n FROM runs \
+      WHERE kind='ingest' GROUP BY hr ORDER BY hr DESC LIMIT 6"
+   ```
+
+   If it returns 24 again, the quantization fix means the data survives it intact — but
+   open a Cloudflare support ticket citing the request-ID pairs in section 2 below.
+
+5. **Rotate the API token** that was pasted into the chat session on 2026-08-25. It is in
+   that transcript in plaintext.
+
+6. **Then start Phase 2's 48-hour clock.** It only counts once `runs` shows zero errors
+   across every kind, including precompute.
+
 ## Done since the last note
 
 The Cloudflare setup that was blocked on auth is finished, and verified against the
@@ -19,122 +82,106 @@ remote database rather than assumed:
 - Ingest and rollup have recorded **zero** errors since that deploy — the last ingest
   error was 18:10:05, the last rollup error 18:07:05, i.e. the deploy is what fixed them.
 
-## Priority 0 — two things are wrong in production right now
+## Priority 0 — status after the PR #6 merge (2026-08-25 21:44)
 
-### 1. Phase 4 is not deployed, and precompute fails every hour because of it
+### 1. Phase 4 deployed — RESOLVED
 
-`main` is at `34797a3 db setup`. The Phase 4 work — the API layer and the real
-`precompute.ts` — lives only on `v0.4` (`077099d`, `5286f17`), which has never been
-deployed. So production is running the old precompute stub:
+`v0.4` merged to `main` as `5000c36` (PR #6) and deployed at 21:44:18 UTC as version
+`785c244d`. Verified live on `bazaar.liamthemo.com`:
 
-```
-SELECT kind, COUNT(*), SUM(error IS NOT NULL) FROM runs GROUP BY kind
-  precompute   40 runs   40 errors   -- all "not implemented"
-```
+- `/api/status` 200 — reports `lastIngestAt`, `dataAgeSeconds`, row counts, per-cron
+  `runs` state.
+- `/api/recipes` 200 — 42 recipes.
+- `/api/scan` 200 — 42 rows.
 
-Consequences, in order of what they block:
+Local gates on merged `main`: `npm test` 210 passing across 20 files, `npm run typecheck`
+clean.
 
-- `scan:default:v1` has **never** been written to KV. `/api/scan` therefore falls
-  through to a live D1 compute on every request (`src/worker/api/scan.ts:38` handles
-  this correctly — it is a fallback, not a bug), which means Phase 4's Done-when
-  ("default scan responds in <50ms warm") cannot be measured yet.
-- `runs` can never show a clean hour, so Phase 2's 48-hour zero-error window cannot
-  start. Fixing this is a prerequisite for closing Phase 2, not just Phase 4.
+Side benefit: the 21:44 `wrangler deploy` also cleared the config drift noted earlier —
+the live script had carried a stray `bazaar_archive` R2 binding that was not in
+`wrangler.jsonc`, and its bindings now match the repo exactly. That is what re-deploying
+from a clean checkout is supposed to do.
 
-**Action:** merge `v0.4` into `main` and deploy, then confirm `precompute` records a
-success and the KV key appears. Local gates are green as of this note: `npm test` 210
-passing across 20 files, `npm run typecheck` clean.
+**Still unverified:** `precompute` has not run under the new code yet — the hourly cron
+fires at :07, so the first real test is 22:07 UTC. Until then `runs` still shows the old
+stub's `error: "not implemented"` as the most recent precompute row.
 
-### 2. Every cron is firing twice, ~54 seconds apart
+### 2. Double cron firing — appears to have stopped, keep watching
 
-Started exactly at the 18:10 deploy. Ingest runs per hour, from `runs`:
+Last doubled tick was **21:35** (runs at 21:35:05 and 21:35:59). The 21:40 and 21:45
+ticks are single. Note the timing: it stopped ~4 minutes *before* the 21:44 deploy, so
+the redeploy is **not** what fixed it — the duplicate schedule registration seems to have
+aged out on Cloudflare's side on its own, roughly 3.5 hours after the 18:10 deploy that
+introduced it.
 
-```
-17:00  12    <- correct
-18:00  21    <- deploy at 18:10
-19:00  24    <- doubled
-20:00  24
-```
-
-Each 5-minute tick produces two full ingests: e.g. 21:15:05 (1,687ms) and 21:15:59
-(3,963ms), both writing 4,272 rows, both recorded as successes. `snapshots` confirms it
-is two real rows per tag per tick, not double-counted logging — two distinct `ts` values
-54s apart, 501 rows each.
-
-Why it matters:
-
-- Doubles D1 rows written against the 50M/month included allowance, and doubles
-  `snapshots` growth against the measured 44 MB steady state in CLAUDE.md section 3.
-- Corrupts the shape of the data, quietly. `hourly.samples` will read 24 instead of 12,
-  and the samples are spaced 54s / 4m06s / 54s rather than evenly at 5 minutes. Section
-  3b's whole argument is that `samples` is the honesty signal — an inflated one is worse
-  than a missing one.
-- R2 is unaffected: both firings map to the same `HHmm` key, so the second overwrites
-  the first.
-
-What has been ruled out already:
-
-- Not a second Worker. The account has two scripts (`hysb-bazaartracker`, `liamthemo`)
-  and only the first has any cron schedules — exactly the expected three, no duplicates.
-- Not a gradual-deployment version split. One version at 100%.
-- Not double-recording in our own code. `runIngest` calls `recordRun` once per run, and
-  the two runs have different `started_at` and different durations.
-- Not the other Worker on the account. `liamthemo` is the personal site — bindings are
-  `ASSETS`, `IMAGES`, `DISCORD_WEBHOOK_URL`, with no D1 binding and no schedules, so it
-  cannot write to `runs` at all.
-- Not the two Cloudflare API tokens. Tokens are credentials; they authenticate a deploy
-  or an API call and cannot register a schedule or invoke a Worker. Deleting one will not
-  stop this.
-
-Two related findings from the same dig:
-
-- **The deployed config has drifted from `wrangler.jsonc`.** The live script carries two
-  R2 bindings — `ARCHIVE` (ours) and `bazaar_archive` (not in the repo) — so something
-  has been edited in the dashboard rather than in the file. The cron list itself is still
-  clean (three schedules, no duplicates), but a config that drifts once can drift again;
-  a `wrangler deploy` from a clean checkout is what re-establishes the repo as the source
-  of truth. Delete the stray binding once nothing references it.
-- **Our own idempotency has a hole that turns this from harmless into harmful.** ROADMAP
-  Phase 2 requires "a retry at the same timestamp upserts, never duplicates", but
-  `src/worker/ingest.ts:69` stamps rows with `ts = Math.floor(Date.now()/1000)` — raw
-  wall clock. Two deliveries 54s apart therefore land on two different `ts` values and
-  never collide, so the upsert never gets the chance to dedupe them. Quantizing to the
-  tick boundary (`Math.floor(startedAt / 300) * 300`) would make a duplicate delivery a
-  no-op upsert and make the series evenly spaced, which every downstream stat assumes.
-  The R2 archive already survives this by accident: its key is `HHmm`, so the second
-  write just overwrites the first. Note the fix is not complete on its own —
-  `buildHourlyIncrementalUpsert` increments `samples` per ingest call, so it needs to
-  increment only when the snapshot row was actually new.
-
-**Confirmed via Workers observability logs (2026-08-25 21:40):** Cloudflare is delivering
-two genuinely separate scheduled events per tick. They carry different `requestId`s and
-different `scheduledTime`s ~55s apart, on the same cron string and the same script
-version:
+That matters for two reasons: it can presumably come back on the next deploy, and it
+means the mechanism is still not understood. Check `runs` for a doubled tick after the
+next few deploys. Evidence, if it recurs and needs a support ticket — two distinct
+scheduled events, one cron, ~55s apart, same script version:
 
 ```
-log 21:15:06  */5 * * * *  scheduledTime 21:15:04  ver fbb5f89f  req 393805d979  1874ms
-log 21:16:03  */5 * * * *  scheduledTime 21:15:59  ver fbb5f89f  req 62d166b655  4249ms
-log 21:07:05  7 * * * *    scheduledTime 21:07:04  ver fbb5f89f  req 3c25c8ed3d   894ms
-log 21:08:01  7 * * * *    scheduledTime 21:07:59  ver fbb5f89f  req 03d59cec50  2474ms
+log 21:15:06  */5 * * * *  scheduledTime 21:15:04  ver fbb5f89f  req 393805d979
+log 21:16:03  */5 * * * *  scheduledTime 21:15:59  ver fbb5f89f  req 62d166b655
 ```
 
-So it is a trigger-registration problem on Cloudflare's side, not our code: both cron
-expressions are affected, every tick, since the 18:10 deploy. Note also that neither
-`scheduledTime` sits on the minute boundary a `*/5` schedule should fire at (:04 and
-:59), which fits a duplicated/stuck schedule entry rather than a retry.
+Ruled out along the way: the other Worker on the account (`liamthemo` — personal site, no
+D1 binding, no schedules), duplicate schedule registration (the API lists exactly three),
+a gradual-deployment version split (one version at 100%), double-recording in our own
+code, and the two Cloudflare API tokens (credentials cannot schedule or invoke anything).
 
-**Remedy, in order:**
+**Snapshots written between 2026-08-25 18:10 and 21:40 are doubled** — two rows per tag
+per tick, 54s apart. Any growth rate or `samples` figure measured over that window is 2x
+inflated. Consider deleting the off-boundary rows.
 
-1. Re-register the triggers. A plain `wrangler deploy` rewrites the schedule list, and
-   the Phase 4 deploy above is the natural opportunity — check whether the doubling stops
-   immediately afterwards.
-2. If it survives that, clear the triggers explicitly (PUT an empty crons list), confirm
-   from `runs` that ingestion stops, then PUT the three schedules back.
-3. If it survives *that*, it is a platform bug: open a support ticket citing the request
-   ID pairs above — two scheduled events, one cron, 55s apart, same version.
+### 3. Production KV was written by a dev session — FIXED IN CONFIG, plus one manual step
 
-Fix the `ts` quantization below regardless of which step clears it. A cron that delivers
-twice should be a no-op, not a data corruption.
+`/api/scan` on default params was serving a KV payload stamped 18:36:18 in which all 42
+recipes read `no-base-data`. The old deployed code never wrote KV, and no precompute run
+has ever succeeded — the author was a local `wrangler dev` session, because
+`wrangler.jsonc` set `"remote": true` on the `CACHE` binding, which makes dev read **and
+write** the production namespace.
+
+`"remote": true` is now removed (ADR-020). Local dev gets an empty namespace and
+`/api/scan` takes its live-D1 fallback, which is the path worth exercising locally anyway.
+
+The bad key is still in production KV. The 22:07 precompute under the new code should
+overwrite it — verify that it did rather than assuming.
+
+The engine was never at fault: forcing the live D1 path returns 40 scored crafts and 2
+`zero-price`, not 42 failures.
+
+### 4. Scan query parameters — FIXED IN CODE, not yet deployed
+
+`parseScanQueryParams` now returns a typed result, and `/api/scan` and `/api/craft/:tag`
+answer 400 naming the offending parameter and its range. `?tax=1.25` (percent instead of
+the fraction 0.0125) used to return 200 with every craft showing a confident, wrong loss;
+it now returns 400 with a message that names the correct form. Ranges cover `tax`,
+`capture`, `tick`, `sleepStart`, `sleepEnd`, `window`, `capital`. Six tests added. See
+ADR-019 for why reject rather than clamp or silently default.
+
+### 5. Phase 4's Done-when is still open
+
+"<50ms warm" has not been measured, because there has never been a warm KV path to
+measure — the key is stale junk and precompute has never succeeded. Measure it after
+22:07, server-side (observability `wallTimeMs` on the fetch event), not with `curl`
+wall-clock from a dev container.
+
+### 6. Ingest idempotency — FIXED IN CODE, not yet deployed
+
+`src/worker/ingest.ts` now stamps every row with the tick boundary
+(`floor(now / 300) * 300`) instead of the wall clock: `products.ts`, `snapshots.ts`, the
+`hourly` row's `last_tick_ts`, and the R2 archive key. `runs.started_at` stays wall-clock
+so an operator can still see when a tick really executed.
+
+One correction to what this note said earlier: `buildHourlyIncrementalUpsert` does **not**
+need separate work. It already carries a `WHERE hourly.last_tick_ts < excluded.last_tick_ts`
+guard; wall-clock stamps were defeating it, because the duplicate delivery arrived with a
+*later* timestamp and so was never the "same tick" the guard was written for. Quantizing
+makes that guard fire correctly, and makes duplicate `snapshots` rows collide on
+`(tag, ts)`. One fix, both paths. See ADR-018.
+
+Regression test: `src/worker/ingest.test.ts` asserts the incident's real timestamp pair
+(21:15:04 and 21:15:59) maps to one boundary.
 
 ## Then — close out Phase 2
 

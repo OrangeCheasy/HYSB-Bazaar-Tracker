@@ -12,13 +12,18 @@ import { errorResponse, json } from "./index.js";
  * not the whole catalog, so there is no default/KV split to make.
  */
 export async function handleCraft(baseTag: string, url: URL, env: Env): Promise<Response> {
+  // Validate before touching D1: a malformed query string is answerable without a read,
+  // and a bad `tax=` on a tag that happens not to exist should say so, not 404.
+  const parsed = parseScanQueryParams(url);
+  if (!parsed.ok) return errorResponse(parsed.error, 400);
+  const { params, capitalAvailable } = parsed.value;
+
   const recipeRows = await selectRecipesByBaseTag(env.DB, baseTag);
   if (recipeRows.length === 0) {
     return errorResponse(`no recipe with base tag '${baseTag}'`, 404);
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const { params, capitalAvailable } = parseScanQueryParams(url);
 
   const results = await Promise.all(
     recipeRows.map(async (row) => {

@@ -4,6 +4,8 @@ import {
   bestContiguousWindow,
   bestSellWindow,
   computeHourProfile,
+  hourRange,
+  meanOverHours,
 } from "../src/profile.js";
 import { makeBar } from "./helpers.js";
 import type { Bar } from "../src/sides.js";
@@ -75,7 +77,8 @@ describe("computeHourProfile", () => {
   });
 
   it("indexes a cheap hour below one and a dear hour above one", () => {
-    // Hour 3 is half price, hour 15 is double. Baseline is the mean over all bars.
+    // Hour 3 is half price, hour 15 is double. The baseline is the mean of the populated
+    // HOURLY means; every hour here has the same sample count, so it equals 245/24.
     const r = computeHourProfile(daysOfHours(2, (h) => (h === 3 ? 5 : h === 15 ? 20 : 10)));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -153,22 +156,41 @@ describe("best window search", () => {
     expect(w?.meanIndex).toBeCloseTo(1, 12);
   });
 
-  it("skips windows containing an hour with no data", () => {
-    // Only hours 0-5 have data, so no 3-hour window may include hour 6 or later.
-    const bars = Array.from({ length: 6 }, (_, h) => makeBar({ ts: h * 3600 }));
+  /**
+   * Coflnet coarsens history the further back you go, so a 30-day backfill legitimately
+   * leaves half the hour slots empty. Requiring every hour in a window to be populated
+   * returns nothing at all on that data, which is worse than returning a partial answer
+   * that says it is partial — hence `hoursPresent`. Matches model.py `best_window`.
+   */
+  it("scores a window on the hours it does have, and reports how many", () => {
+    // Every other hour populated, priced flat.
+    const bars = Array.from({ length: 12 }, (_, i) => makeBar({ ts: i * 2 * 3600 }));
     const r = computeHourProfile(bars);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const w = bestBuyWindow(r.value, 3);
+    const w = bestBuyWindow(r.value, 4);
     expect(w).toBeDefined();
-    expect(w && w.startHour + w.lengthHours).toBeLessThanOrEqual(6);
+    expect(w?.lengthHours).toBe(4);
+    expect(w?.hoursPresent).toBe(2);
   });
 
-  it("returns undefined when no window of that length has complete data", () => {
-    const r = computeHourProfile([makeBar({ ts: 0 }), makeBar({ ts: 7200 })]);
+  it("reports a full count when every hour of the window has data", () => {
+    const r = computeHourProfile(daysOfHours(2, (h) => (h >= 2 && h <= 4 ? 6 : 10)));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const w = bestBuyWindow(r.value, 3);
+    expect(w?.startHour).toBe(2);
+    expect(w?.hoursPresent).toBe(3);
+  });
+
+  it("returns undefined when fewer than half the window's hours have data", () => {
+    // One populated hour cannot carry a 5-hour window, which needs at least two.
+    const r = computeHourProfile([makeBar({ ts: 0 })]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(bestBuyWindow(r.value, 5)).toBeUndefined();
+    // ...but a 2-hour window needs only one, so that one still scores.
+    expect(bestBuyWindow(r.value, 2)?.hoursPresent).toBe(1);
   });
 
   it("rejects out-of-range window lengths", () => {
@@ -178,5 +200,97 @@ describe("best window search", () => {
     expect(bestContiguousWindow(r.value, 0, "min")).toBeUndefined();
     expect(bestContiguousWindow(r.value, 25, "min")).toBeUndefined();
     expect(bestContiguousWindow(r.value, 2.5, "min")).toBeUndefined();
+  });
+});
+
+describe("hourRange", () => {
+  /**
+   * config.json defaults sleep_window to "23-07": the hours a buy order sits unattended.
+   * That window wraps midnight, which is exactly why it is expressed as a range and not
+   * a start plus a length.
+   */
+  it("builds the default overnight window, wrapping past midnight", () => {
+    expect(hourRange(23, 7)).toEqual([23, 0, 1, 2, 3, 4, 5, 6]);
+  });
+
+  it("builds a same-day window", () => {
+    expect(hourRange(9, 12)).toEqual([9, 10, 11]);
+  });
+
+  it("treats a start equal to the end as the whole day, not an empty window", () => {
+    expect(hourRange(23, 23)).toHaveLength(24);
+    expect(hourRange(0, 0)).toHaveLength(24);
+  });
+
+  it("normalizes out-of-range and fractional inputs", () => {
+    expect(hourRange(25, 27)).toEqual([1, 2]);
+    expect(hourRange(-1, 1)).toEqual([23, 0]);
+    expect(hourRange(9.7, 11.2)).toEqual([9, 10]);
+  });
+});
+
+describe("meanOverHours", () => {
+  it("averages a field across the named hours, ignoring empty ones", () => {
+    // Hours 0-5 populated at ask 10; hours 6+ empty.
+    const r = computeHourProfile(
+      Array.from({ length: 6 }, (_, h) => makeBar({ ts: h * 3600 })),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(meanOverHours(r.value, [0, 1, 2], "askMean")).toBe(10);
+    // Hours 4, 5 have data; 6, 7 do not - the mean must come from the two that do.
+    expect(meanOverHours(r.value, [4, 5, 6, 7], "askMean")).toBe(10);
+  });
+
+  it("weights the populated hours by their own means", () => {
+    const r = computeHourProfile([
+      makeBar({ ts: 0, askAvg: 10, askMin: 10, askMax: 10 }),
+      makeBar({ ts: 3600, askAvg: 20, askMin: 20, askMax: 20 }),
+    ]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(meanOverHours(r.value, [0, 1], "askMean")).toBe(15);
+    expect(meanOverHours(r.value, [0], "askMean")).toBe(10);
+  });
+
+  /**
+   * Returns undefined, not 0, so the caller falls back to the current book. model.py
+   * returns 0.0 and leans on `or last_bid`; 0 is a legitimate price for a dead item, so a
+   * "no data" sentinel must not also be a possible answer.
+   */
+  it("returns undefined when none of the named hours has data", () => {
+    const r = computeHourProfile([makeBar({ ts: 0 })]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(meanOverHours(r.value, [5, 6, 7], "askMean")).toBeUndefined();
+  });
+
+  it("wraps out-of-range hour numbers rather than reading past the array", () => {
+    const r = computeHourProfile([makeBar({ ts: 0, askAvg: 10, askMin: 10, askMax: 10 })]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(meanOverHours(r.value, [24], "askMean")).toBe(10);
+    expect(meanOverHours(r.value, [-24], "askMean")).toBe(10);
+  });
+
+  it("reads the overnight bid the way the craft model does", () => {
+    // Bid dips to 6 during 23-02 and sits at 10 the rest of the day.
+    const overnight = new Set([23, 0, 1]);
+    const bars = Array.from({ length: 24 }, (_, h) => {
+      const bid = overnight.has(h) ? 6 : 10;
+      return makeBar({
+        ts: h * 3600,
+        askAvg: 12,
+        askMin: 12,
+        askMax: 12,
+        bidAvg: bid,
+        bidMin: bid,
+        bidMax: bid,
+      });
+    });
+    const r = computeHourProfile(bars);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(meanOverHours(r.value, hourRange(23, 2), "bidMean")).toBe(6);
   });
 });

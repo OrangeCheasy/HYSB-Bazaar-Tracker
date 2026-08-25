@@ -8,9 +8,11 @@ import type { Stats } from "../src/stats.js";
 
 /**
  * KNOWN-VALUE TESTS - the arithmetic is written out in full so it can be checked by
- * hand, independently of the implementation.
+ * hand, independently of the implementation. Scenario shapes follow bzcraft/model.py
+ * `craft_economics`.
  *
- * Fixture, 24 identical hourly bars per item so every mean equals the stated value:
+ * Fixture, 24 identical hourly bars per item, so every mean equals the last value and
+ * the stated numbers hold whichever the code reads:
  *
  *   COAL (base)              ask 10      bid 9
  *                            askDepth      500,000   bidDepth   1,900,000
@@ -20,54 +22,57 @@ import type { Stats } from "../src/stats.js";
  *                            askDepth       50,000   bidDepth      30,000
  *                            ibWeek        700,000   isWeek       350,000
  *
- *   recipe ratio 160 (verified)   sell tax 1.25%   capture 10%
+ *   ratio 160 (verified)   tax 1.25%   capture 10%   tick 0.1
  *
- * Derived flow rates (trailing-week counters divided by 7):
- *   base.isPerDay    = 7,000,000 / 7 = 1,000,000   <- instant-sells that fill MY buy order
- *   base.ibPerDay    = 3,500,000 / 7 =   500,000
- *   product.ibPerDay =   700,000 / 7 =   100,000   <- instant-buys that fill MY sell offer
+ * Flow rates come from the NEWEST trailing-week counter, divided by 168 or 7:
+ *   base.isPerHour    = 7,000,000 / 168 = 41,666.67   base.isPerDay    = 1,000,000
+ *   product.ibPerHour =   700,000 / 168 =  4,166.67   product.ibPerDay =   100,000
  *
  * THROUGHPUT
- *   baseUnitsPerDay     = 1,000,000 x 0.10 = 100,000
- *   craftsFromBase      =   100,000 / 160  =     625
- *   productUnitsPerDay  =   100,000 x 0.10 =  10,000
- *   craftsFromProduct   =                     10,000
- *   craftsPerDay        = min(625, 10,000) =     625   -> limited by base supply
+ *   baseUnitsPerDay    = 41,666.67 x 24 x 0.10 = 100,000
+ *   craftsFromSupply   =   100,000 / 160       =     625
+ *   productUnitsPerDay =  4,166.67 x 24 x 0.10 =  10,000
+ *   craftsFromDemand   =                          10,000
+ *   craftsPerDay       = min(625, 10,000)      =     625   -> limited by base supply
+ *   hoursToFillOneCraft = 160 / (41,666.67 x 0.10)        = 0.0384h
  *
  * FILL FEASIBILITY
- *   buy order on base   = isPerDay / (bidDepth + ratio x craftsPerDay)
- *                       = 1,000,000 / (1,900,000 + 160 x 625)
- *                       = 1,000,000 / 2,000,000                     = 0.5
+ *   buy order on base     = isPerDay / (bidDepth + ratio x craftsPerDay)
+ *                         = 1,000,000 / (1,900,000 + 100,000) = 0.5
  *   sell offer on product = ibPerDay / (askDepth + craftsPerDay)
- *                       = 100,000 / (50,000 + 625) = 1.975...  -> clamped to 1.0
+ *                         = 100,000 / 50,625 = 1.975...  -> clamped to 1.0
+ *   combined (orders and timed)                            = 0.5
  *
- * SCENARIO 1 - "instant": instant-buy the base, instant-sell the product. The floor.
- *   cost    = 10 x 160                    = 1600
- *   gross   = 1700                        = 1700
- *   tax     = 1700 x 0.0125               =   21.25
- *   profit  = 1700 - 21.25 - 1600         =   78.75
- *   margin  = 78.75 / 1600                =    0.04921875   (4.921875%)
- *   feasibility                           =    1.0          (always fills)
+ * SCENARIO "floor" - instant both ways. Always available; the true worst case.
+ *   cost   = 10 x 160              = 1600
+ *   gross  = 1700
+ *   tax    = 1700 x 0.0125         =   21.25
+ *   profit = 1700 - 21.25 - 1600   =   78.75
+ *   margin = 78.75 / 1600          =    0.04921875
+ *   feasibility                    =    1.0
  *
- * SCENARIO 2 - "mixed": buy order on the base, instant-sell the product.
- *   cost    = 9 x 160                     = 1440
- *   gross   = 1700
- *   tax     = 1700 x 0.0125               =   21.25
- *   profit  = 1700 - 21.25 - 1440         =  238.75
- *   margin  = 238.75 / 1440               =    0.16579861...
- *   feasibility                           =    0.5          (buy order must fill)
+ * SCENARIO "orders" - orders on the current book, each stepped one tick inside.
+ *   buy    = 9 + 0.1               =    9.1
+ *   sell   = 1800 - 0.1            = 1799.9
+ *   cost   = 9.1 x 160             = 1456
+ *   tax    = 1799.9 x 0.0125       =   22.49875
+ *   profit = 1799.9 - 22.49875 - 1456 = 321.40125
+ *   margin = 321.40125 / 1456      =    0.2207426...
+ *   feasibility                    =    0.5
  *
- * SCENARIO 3 - "orders": buy order on the base, sell offer on the product.
- *   cost    = 9 x 160                     = 1440
- *   gross   = 1800
- *   tax     = 1800 x 0.0125               =   22.5
- *   profit  = 1800 - 22.5 - 1440          =  337.5
- *   margin  = 337.5 / 1440                =    0.234375      (23.4375%)
- *   feasibility = 0.5 x 1.0               =    0.5           (BOTH must fill)
+ * SCENARIO "timed" - the same orders, priced from the overnight and peak windows. The
+ * inputs are the RAW window prices; the tick is applied here exactly as for the book.
+ *   window bid 8.4    -> buy  = 8.4 + 0.1    =    8.5
+ *   window ask 1850.1 -> sell = 1850.1 - 0.1 = 1850
+ *   cost   = 8.5 x 160             = 1360
+ *   tax    = 1850 x 0.0125         =   23.125
+ *   profit = 1850 - 23.125 - 1360  =  466.875
+ *   margin = 466.875 / 1360        =    0.3432904...
+ *   feasibility                    =    0.5
  *
- * HEADLINE
- *   profitPerDay    = 337.5 x 625         = 210,937.5
- *   capitalRequired = 1440  x 625         = 900,000
+ * HEADLINE (ranked on timed, per model.py profit_per_day)
+ *   profitPerDay    = 466.875 x 625 = 291,796.875
+ *   capitalPerCraft = 1360
  */
 
 const BASE_BARS: Bar[] = constantSeries(24, {
@@ -105,7 +110,7 @@ const RECIPE: Recipe = {
   note: null,
 };
 
-const MARKET: MarketConfig = { sellTaxRate: 0.0125, captureFraction: 0.1 };
+const MARKET: MarketConfig = { sellTaxRate: 0.0125, captureFraction: 0.1, tick: 0.1 };
 
 function statsOf(bars: Bar[]): Stats {
   const r = computeStats(bars);
@@ -128,16 +133,17 @@ function analyze(over: Partial<Parameters<typeof analyzeCraft>[0]> = {}) {
 }
 
 describe("fixture sanity - the inputs really are what the arithmetic above assumes", () => {
-  it("has the stated flow rates and depths", () => {
+  it("has the stated flow rates, depths and last prices", () => {
     expect(BASE.isPerDay).toBe(1_000_000);
-    expect(BASE.ibPerDay).toBe(500_000);
-    expect(BASE.bidDepthMean).toBe(1_900_000);
-    expect(BASE.askMean).toBe(10);
-    expect(BASE.bidMean).toBe(9);
+    expect(BASE.isPerHour).toBeCloseTo(7_000_000 / 168, 9);
+    expect(BASE.lastBidDepth).toBe(1_900_000);
+    expect(BASE.lastAsk).toBe(10);
+    expect(BASE.lastBid).toBe(9);
     expect(PRODUCT.ibPerDay).toBe(100_000);
-    expect(PRODUCT.askDepthMean).toBe(50_000);
-    expect(PRODUCT.askMean).toBe(1800);
-    expect(PRODUCT.bidMean).toBe(1700);
+    expect(PRODUCT.ibPerHour).toBeCloseTo(700_000 / 168, 9);
+    expect(PRODUCT.lastAskDepth).toBe(50_000);
+    expect(PRODUCT.lastAsk).toBe(1800);
+    expect(PRODUCT.lastBid).toBe(1700);
   });
 });
 
@@ -158,16 +164,16 @@ describe("applySellTax", () => {
 });
 
 describe("analyzeCraft - known values", () => {
-  const r = analyze();
+  const r = analyze({ timedBuyWindowBid: 8.4, timedSellWindowAsk: 1850.1 });
 
   it("succeeds on the fixture", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("computes the instant scenario: cost 1600, tax 21.25, profit 78.75", () => {
+  it("computes the floor scenario: cost 1600, tax 21.25, profit 78.75", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const s = r.value.scenarios.instant;
+    const s = r.value.scenarios.floor;
     expect(s.baseUnitPrice).toBe(10);
     expect(s.productUnitPrice).toBe(1700);
     expect(s.costPerCraft).toBe(1600);
@@ -178,57 +184,60 @@ describe("analyzeCraft - known values", () => {
     expect(s.fillFeasibility).toBe(1);
   });
 
-  it("computes the mixed scenario: cost 1440, tax 21.25, profit 238.75", () => {
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const s = r.value.scenarios.mixed;
-    expect(s.baseUnitPrice).toBe(9);
-    expect(s.productUnitPrice).toBe(1700);
-    expect(s.costPerCraft).toBe(1440);
-    expect(s.taxPerCraft).toBe(21.25);
-    expect(s.profitPerCraft).toBe(238.75);
-    expect(s.marginPct).toBeCloseTo(238.75 / 1440, 12);
-    expect(s.fillFeasibility).toBeCloseTo(0.5, 12);
-  });
-
-  it("computes the orders scenario: cost 1440, tax 22.5, profit 337.5", () => {
+  it("computes orders one tick inside the book: cost 1456, profit 321.40125", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const s = r.value.scenarios.orders;
-    expect(s.baseUnitPrice).toBe(9);
-    expect(s.productUnitPrice).toBe(1800);
-    expect(s.costPerCraft).toBe(1440);
-    expect(s.grossPerCraft).toBe(1800);
-    expect(s.taxPerCraft).toBe(22.5);
-    expect(s.profitPerCraft).toBe(337.5);
-    expect(s.marginPct).toBeCloseTo(0.234375, 12);
+    expect(s.baseUnitPrice).toBeCloseTo(9.1, 12);
+    expect(s.productUnitPrice).toBeCloseTo(1799.9, 12);
+    expect(s.costPerCraft).toBeCloseTo(1456, 9);
+    expect(s.taxPerCraft).toBeCloseTo(22.49875, 9);
+    expect(s.profitPerCraft).toBeCloseTo(321.40125, 9);
+    expect(s.marginPct).toBeCloseTo(321.40125 / 1456, 12);
     expect(s.fillFeasibility).toBeCloseTo(0.5, 12);
   });
 
-  it("orders the three scenarios floor < mixed < orders", () => {
+  it("computes the timed scenario from window prices: cost 1360, profit 466.875", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const { instant, mixed, orders } = r.value.scenarios;
-    expect(instant.profitPerCraft).toBeLessThan(mixed.profitPerCraft);
-    expect(mixed.profitPerCraft).toBeLessThan(orders.profitPerCraft);
-    // ...and the feasibility runs the other way. That is the entire point.
-    expect(instant.fillFeasibility).toBeGreaterThanOrEqual(orders.fillFeasibility);
+    const s = r.value.scenarios.timed;
+    expect(s.baseUnitPrice).toBeCloseTo(8.5, 12);
+    expect(s.productUnitPrice).toBeCloseTo(1850, 9);
+    expect(s.costPerCraft).toBeCloseTo(1360, 9);
+    expect(s.taxPerCraft).toBeCloseTo(23.125, 9);
+    expect(s.profitPerCraft).toBeCloseTo(466.875, 9);
+    expect(s.marginPct).toBeCloseTo(466.875 / 1360, 12);
+    expect(s.fillFeasibility).toBeCloseTo(0.5, 12);
+  });
+
+  it("ranks profitPerDay on the timed scenario, not the current book", () => {
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.profitPerDay).toBeCloseTo(291_796.875, 6);
+    expect(r.value.capitalPerCraft).toBe(1360);
+    expect(r.value.capitalRequired).toBeCloseTo(1360 * 625, 6);
+  });
+
+  it("orders the scenarios floor < orders < timed, feasibility running the other way", () => {
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const { floor, orders, timed } = r.value.scenarios;
+    expect(floor.profitPerCraft).toBeLessThan(orders.profitPerCraft);
+    expect(orders.profitPerCraft).toBeLessThan(timed.profitPerCraft);
+    expect(floor.fillFeasibility).toBeGreaterThan(timed.fillFeasibility);
   });
 
   it("computes throughput: 625 crafts/day, limited by base supply", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.value.throughput.baseUnitsPerDay).toBe(100_000);
-    expect(r.value.throughput.productUnitsPerDay).toBe(10_000);
-    expect(r.value.throughput.craftsPerDay).toBeCloseTo(625, 12);
-    expect(r.value.throughput.limitedBy).toBe("base-supply");
-  });
-
-  it("computes profitPerDay 210937.5 and capitalRequired 900000", () => {
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.value.profitPerDay).toBeCloseTo(210_937.5, 6);
-    expect(r.value.capitalRequired).toBeCloseTo(900_000, 6);
+    const t = r.value.throughput;
+    expect(t.baseUnitsPerDay).toBeCloseTo(100_000, 6);
+    expect(t.productUnitsPerDay).toBeCloseTo(10_000, 6);
+    expect(t.craftsFromSupply).toBeCloseTo(625, 9);
+    expect(t.craftsFromDemand).toBeCloseTo(10_000, 6);
+    expect(t.craftsPerDay).toBeCloseTo(625, 9);
+    expect(t.limitedBy).toBe("base-supply");
+    expect(t.hoursToFillOneCraft).toBeCloseTo(160 / ((7_000_000 / 168) * 0.1), 9);
   });
 
   it("raises no flags on a healthy, verified craft", () => {
@@ -238,9 +247,51 @@ describe("analyzeCraft - known values", () => {
   });
 });
 
+describe("analyzeCraft - the timed fallback", () => {
+  /**
+   * model.py: `buy_price = timed_buy_price if timed_buy_price else order_buy`. With no
+   * hour profile the timed scenario must equal the current-book one rather than silently
+   * pricing at zero.
+   */
+  it("falls back to current-book order pricing when no window prices are given", () => {
+    const r = analyze();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const { orders, timed } = r.value.scenarios;
+    expect(timed.baseUnitPrice).toBe(orders.baseUnitPrice);
+    expect(timed.productUnitPrice).toBe(orders.productUnitPrice);
+    expect(timed.profitPerCraft).toBeCloseTo(orders.profitPerCraft, 12);
+  });
+
+  it("ignores a non-positive window price rather than pricing a craft at zero", () => {
+    const r = analyze({ timedBuyWindowBid: 0, timedSellWindowAsk: 0 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.scenarios.timed.baseUnitPrice).toBeCloseTo(9.1, 12);
+    expect(r.value.scenarios.timed.productUnitPrice).toBeCloseTo(1799.9, 12);
+  });
+});
+
+describe("analyzeCraft - the tick", () => {
+  it("prices orders at the book itself when the tick is zero", () => {
+    const r = analyze({ market: { ...MARKET, tick: 0 } });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.scenarios.orders.baseUnitPrice).toBe(9);
+    expect(r.value.scenarios.orders.productUnitPrice).toBe(1800);
+  });
+
+  it("never lets an oversized tick drive the sell price below zero", () => {
+    const r = analyze({ market: { ...MARKET, tick: 99_999 } });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.scenarios.orders.productUnitPrice).toBe(0);
+    expect(r.value.scenarios.orders.profitPerCraft).toBeLessThan(0);
+  });
+});
+
 describe("analyzeCraft - throughput limits", () => {
   it("switches to product-demand when the product cannot absorb the crafts", () => {
-    // Product ibWeek 7,000 -> ibPerDay 1,000 -> x0.10 = 100 crafts/day, below 625.
     const product = statsOf(
       constantSeries(24, {
         askAvg: 1800,
@@ -258,36 +309,63 @@ describe("analyzeCraft - throughput limits", () => {
     const r = analyze({ product });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.value.throughput.craftsPerDay).toBeCloseTo(100, 12);
+    expect(r.value.throughput.craftsPerDay).toBeCloseTo(100, 9);
     expect(r.value.throughput.limitedBy).toBe("product-demand");
   });
 
   it("caps by capital when the wallet is the binding constraint", () => {
-    // 144,000 / 1440 per craft = 100 crafts, below the 625 the market would allow.
-    const r = analyze({ capitalAvailable: 144_000 });
+    // 145,600 / 1456 per craft at order pricing = 100 crafts, below the market's 625.
+    const r = analyze({ capitalAvailable: 145_600 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.value.throughput.craftsPerDay).toBeCloseTo(100, 12);
+    expect(r.value.throughput.craftsPerDay).toBeCloseTo(100, 9);
     expect(r.value.throughput.limitedBy).toBe("capital");
-    expect(r.value.capitalRequired).toBeCloseTo(144_000, 6);
   });
 
   it("does not cap when capital exceeds what the market allows", () => {
     const r = analyze({ capitalAvailable: 10_000_000 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.value.throughput.craftsPerDay).toBeCloseTo(625, 12);
+    expect(r.value.throughput.craftsPerDay).toBeCloseTo(625, 9);
     expect(r.value.throughput.limitedBy).toBe("base-supply");
   });
 
-  it("scales throughput down by the hours the player is asleep", () => {
-    // 8 sleeping hours -> 16/24 of the day -> 625 x 2/3 = 416.666...
-    const r = analyze({
-      market: { ...MARKET, sleepHours: [0, 1, 2, 3, 4, 5, 6, 7] },
-    });
+  /**
+   * Throughput is bounded by market flow, NOT by how long the player is logged in.
+   * An earlier version scaled it by waking hours, which contradicts the premise: the buy
+   * order is supposed to fill overnight while you sleep. model.py `craft_economics` takes
+   * no sleep parameter at all - the sleep window prices the timed buy, nothing more.
+   */
+  it("does not scale throughput by the player's waking hours", () => {
+    const r = analyze();
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.value.throughput.craftsPerDay).toBeCloseTo((625 * 2) / 3, 9);
+    expect(r.value.throughput.craftsPerDay).toBeCloseTo(625, 9);
+    expect(r.value.throughput.craftsPerDay).toBe(
+      Math.min(r.value.throughput.craftsFromSupply, r.value.throughput.craftsFromDemand),
+    );
+  });
+
+  it("reports an infinite fill time when no base flows at all", () => {
+    const dead = statsOf(
+      constantSeries(24, {
+        askAvg: 10,
+        askMin: 10,
+        askMax: 10,
+        bidAvg: 9,
+        bidMin: 9,
+        bidMax: 9,
+        askDepth: 500_000,
+        bidDepth: 1_900_000,
+        ibWeek: 0,
+        isWeek: 0,
+      }),
+    );
+    const r = analyze({ base: dead });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.throughput.hoursToFillOneCraft).toBe(Number.POSITIVE_INFINITY);
+    expect(r.value.flags).toContain("slow-fill");
   });
 });
 
@@ -298,23 +376,7 @@ describe("analyzeCraft - warning flags", () => {
   });
 
   it("flags an implausible margin - the recipe is wrong or the item is walled", () => {
-    // Product ask 10,000 against a 1,600 parity cost: a >500% margin does not happen.
-    const product = statsOf(
-      constantSeries(24, {
-        askAvg: 10_000,
-        askMin: 10_000,
-        askMax: 10_000,
-        bidAvg: 9_900,
-        bidMin: 9_900,
-        bidMax: 9_900,
-        askDepth: 50_000,
-        bidDepth: 30_000,
-        ibWeek: 700_000,
-        isWeek: 350_000,
-      }),
-    );
-    expect(analyze({ product }).ok).toBe(true);
-    const r = analyze({ product });
+    const r = analyze({ timedSellWindowAsk: 10_000 });
     expect(r.ok && r.value.flags).toContain("implausible-margin");
   });
 
@@ -339,8 +401,14 @@ describe("analyzeCraft - warning flags", () => {
     expect(r.ok && r.value.flags).toContain("below-ratio-parity");
   });
 
-  it("flags thin volume on either side", () => {
-    const thinBase = statsOf(
+  /**
+   * model.py: "deep buy-order queue (~Nh of flow resting)". Depth divided by hourly flow
+   * is how long the queue ahead of your order takes to clear, which is the number that
+   * decides whether an overnight buy order fills.
+   */
+  it("flags a buy-order queue deeper than 48 hours of flow", () => {
+    // 9,000,000 / 41,666.67 per hour = 216h of resting flow, well past 48.
+    const clogged = statsOf(
       constantSeries(24, {
         askAvg: 10,
         askMin: 10,
@@ -348,14 +416,76 @@ describe("analyzeCraft - warning flags", () => {
         bidAvg: 9,
         bidMin: 9,
         bidMax: 9,
-        askDepth: 500,
-        bidDepth: 500,
-        ibWeek: 700,
-        isWeek: 700,
+        askDepth: 500_000,
+        bidDepth: 9_000_000,
+        ibWeek: 3_500_000,
+        isWeek: 7_000_000,
       }),
     );
-    const r = analyze({ base: thinBase });
-    expect(r.ok && r.value.flags).toContain("thin-base-volume");
+    const r = analyze({ base: clogged });
+    expect(r.ok && r.value.flags).toContain("deep-buy-queue");
+  });
+
+  it("flags a product that is barely ever instant-bought", () => {
+    const quiet = statsOf(
+      constantSeries(24, {
+        askAvg: 1800,
+        askMin: 1800,
+        askMax: 1800,
+        bidAvg: 1700,
+        bidMin: 1700,
+        bidMax: 1700,
+        askDepth: 50_000,
+        bidDepth: 30_000,
+        ibWeek: 100,
+        isWeek: 100,
+      }),
+    );
+    const r = analyze({ product: quiet });
+    expect(r.ok && r.value.flags).toContain("product-rarely-instant-bought");
+  });
+
+  it("flags a volatile base", () => {
+    // Ask alternates 8 and 12 around a mean of 10: pstdev 2, volatility 0.20 > 0.12.
+    const swings: Bar[] = constantSeries(24, {
+      askDepth: 500_000,
+      bidDepth: 1_900_000,
+      ibWeek: 3_500_000,
+      isWeek: 7_000_000,
+    }).map((b, i) => {
+      const ask = i % 2 === 0 ? 8 : 12;
+      return { ...b, askAvg: ask, askMin: ask, askMax: ask, bidAvg: 7, bidMin: 7, bidMax: 7 };
+    });
+    const r = analyze({ base: statsOf(swings) });
+    expect(r.ok && r.value.flags).toContain("volatile-base");
+  });
+
+  /**
+   * The single most important flag on the site: the craft only works if both orders
+   * fill. model.py raises it when the timed plan profits but the instant floor does not.
+   */
+  it("flags a craft whose profit depends entirely on both orders filling", () => {
+    // Product bid 1500 makes the floor negative while the timed scenario stays positive.
+    const product = statsOf(
+      constantSeries(24, {
+        askAvg: 1800,
+        askMin: 1800,
+        askMax: 1800,
+        bidAvg: 1500,
+        bidMin: 1500,
+        bidMax: 1500,
+        askDepth: 50_000,
+        bidDepth: 30_000,
+        ibWeek: 700_000,
+        isWeek: 350_000,
+      }),
+    );
+    const r = analyze({ product });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.scenarios.floor.profitPerCraft).toBeLessThan(0);
+    expect(r.value.scenarios.timed.profitPerCraft).toBeGreaterThan(0);
+    expect(r.value.flags).toContain("profit-needs-both-fills");
   });
 
   it("flags a wide spread", () => {
@@ -402,6 +532,42 @@ describe("analyzeCraft - warning flags", () => {
   });
 });
 
+describe("analyzeCraft - the instant-sell tax flag", () => {
+  /**
+   * model.py taxes the instant-sell in scenario A:
+   *   floor_revenue_net = ench.last_bid * (1 - tax)
+   * which confirms the conservative default. Kept as a flag because CLAUDE.md section 8
+   * words it ambiguously. See ADR-008.
+   *
+   * Untaxed floor arithmetic: 1700 - 0 - 1600 = 100, margin 100 / 1600 = 0.0625.
+   */
+  it("taxes instant-sells by default, matching model.py", () => {
+    const r = analyze();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.scenarios.floor.taxPerCraft).toBe(21.25);
+  });
+
+  it("drops the tax from the floor when told to, leaving order scenarios taxed", () => {
+    const r = analyze({
+      market: { ...MARKET, taxOnInstantSell: false },
+      timedBuyWindowBid: 8.4,
+      timedSellWindowAsk: 1850.1,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const { floor, timed } = r.value.scenarios;
+
+    expect(floor.taxPerCraft).toBe(0);
+    expect(floor.profitPerCraft).toBe(100);
+    expect(floor.marginPct).toBeCloseTo(0.0625, 12);
+
+    // A sell offer is taxed under either reading, so the headline is untouched.
+    expect(timed.taxPerCraft).toBeCloseTo(23.125, 9);
+    expect(timed.profitPerCraft).toBeCloseTo(466.875, 9);
+  });
+});
+
 describe("analyzeCraft - errors", () => {
   it("rejects a zero ratio rather than dividing by it", () => {
     const r = analyze({ recipe: { ...RECIPE, ratio: 0 } });
@@ -410,9 +576,9 @@ describe("analyzeCraft - errors", () => {
   });
 
   /**
-   * An item with no resting buy orders has bid 0. Both order-based scenarios then have
-   * a zero cost basis and an infinite margin. Erroring is deliberate: a margin of
-   * Infinity on the scan page is worse than an absent row.
+   * An item with no resting buy orders has bid 0. model.py drops such points during
+   * normalization; we keep them in D1 as real history and reject here instead, because a
+   * row reading "Infinity%" on the scan page is worse than an absent row.
    */
   it("rejects a zero cost basis - an item with no buy orders at all", () => {
     const noBids = statsOf(

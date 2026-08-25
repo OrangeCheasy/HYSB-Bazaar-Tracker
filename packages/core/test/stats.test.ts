@@ -106,8 +106,8 @@ describe("computeStats", () => {
     if (!r.ok) return;
     expect(r.value.ibPerDay).toBe(0);
     expect(r.value.isPerDay).toBe(0);
-    expect(r.value.askDepthMean).toBe(0);
-    expect(r.value.bidDepthMean).toBe(0);
+    expect(r.value.lastAskDepth).toBe(0);
+    expect(r.value.lastBidDepth).toBe(0);
   });
 
   it("rejects a series whose mid price is zero rather than dividing by it", () => {
@@ -126,7 +126,7 @@ describe("computeStats", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.spreadMean).toBe(0);
-    expect(r.value.spreadPctMean).toBe(0);
+    expect(r.value.spreadPct).toBe(0);
   });
 
   it("reports coverage below one when bars are missing from the span", () => {
@@ -190,5 +190,22 @@ describe("numeric helpers", () => {
     const xs = [3, 1, 2];
     percentile(xs, 0.5);
     expect(xs).toEqual([3, 1, 2]);
+  });
+});
+
+describe("computeStats coverage denominator", () => {
+  it("falls back to the sample count when the bars carry no nominal interval", () => {
+    // A hand-built Bar can carry intervalSeconds 0; aggregate() and normalizeHourlyRow
+    // never produce one. Coverage then has no slot width to divide by, so it degrades to
+    // "every bar I have is a bar I expected" rather than dividing by zero.
+    const bars = [
+      makeBar({ ts: 0, intervalSeconds: 0 }),
+      makeBar({ ts: 3600, intervalSeconds: 0 }),
+    ];
+    const r = computeStats(bars);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.intervalSeconds).toBe(0);
+    expect(r.value.coverage).toBe(1);
   });
 });

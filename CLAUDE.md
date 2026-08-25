@@ -1,4 +1,4 @@
-# CLAUDE.md — bazaar.laimthemo.com
+# CLAUDE.md — bazaar.liamthemo.com
 
 Bazaar craft analytics for Hypixel SkyBlock. Tracks base→enchanted craft margins,
 diurnal price patterns, and volume-adjusted profitability. Public read-only site.
@@ -76,11 +76,18 @@ the lever that controls growth.
 
 | Tier | Which tags | Storage | Growth |
 |---|---|---|---|
-| **A** | tags referenced by a recipe (~150) | 5-min `snapshots` pruned at 7d, `hourly` forever | ~105 MB/year |
+| **A** | recipe tags, **plus** any tag in the top ~500 by `sellMovingWeek` | 5-min `snapshots` pruned at 7d, `hourly` forever | ~350 MB/year |
 | **B** | everything else | `hourly` only, no snapshots, pruned to 90d then `daily` | bounded |
 
-Promoting a tag from B to A must be a config change, never a migration. Tier A alone fits
-inside D1's **free** 500 MB database limit for roughly four years.
+Tier A membership is **recomputed each run**, not a static list. A tag that starts trading
+gets promoted automatically; a dead one falls out. Promotion must never require a
+migration.
+
+On Workers Paid this is a choice, not a constraint — full 5-minute coverage of all 1500
+products would be ~26M rows/month written against the 50M included, and ~2 GB/year in
+`hourly` against a 10 GB cap. It fits. We tier anyway because five-minute resolution on an
+item nobody trades has no analytical value and consumes the headroom we'd want for
+backfills, reprocessing, and schema migrations. Keep roughly half the write budget free.
 
 The reason we still fetch all 1500 products: Hypixel returns them in one response and
 offers no way to request a subset. Tiering happens after parsing, on our side.
@@ -110,30 +117,41 @@ build our own history database from it and stop depending on anyone else's.
 
 Verified against Cloudflare docs; re-check before assuming.
 
-- **Workers Paid ($5/mo) is required.** Free plan caps CPU at 10ms per invocation. The
-  ingest cron parses a multi-megabyte JSON payload and writes ~1500 rows; it will not
-  fit. Free also caps D1 at 50 queries per invocation and 500MB per database.
-- **D1 query count per invocation** — 1000 on paid, 50 on free. Never loop
-  `INSERT` per product. Build one multi-row `INSERT ... VALUES (...),(...)` or use
-  `db.batch()`, chunked to stay well under the cap. Bound parameters cap at 100 per
-  query, so chunk by parameter count, not row count.
+- **Workers Paid is active.** 30s CPU per invocation, 1000 D1 queries per invocation, 50M
+  D1 rows written/month, 10 GB per database. Queues and Durable Objects are available.
+  The remaining limits are real but generous — design for headroom, not survival.
+  **Measured, not assumed:** `JSON.parse` on the live payload has a median wall time of
+  **33.5ms** over 10 runs (min 21ms, max 51ms) — over 3x the free plan's 10ms CPU cap on
+  parsing alone, before a single row is built or written. Workers Paid was never optional.
+- **D1 query count per invocation** — 1000. Still never loop `INSERT` per product: bound
+  parameters cap at **100 per query** regardless of plan, so chunk by parameter count,
+  not row count, and use `db.batch()`.
 - **D1 storage** — 10 GB max per database on paid, 500 MB on free; 1 TB per account.
-  Retention policy is not optional:
-  - `snapshots` (5-min, Tier A only): prune to **7 days** ≈ 25 MB steady state
-  - `hourly`: keep indefinitely. Tier A ≈ 105 MB/year — this is the table that grows
-    forever, so it is the one to watch
+  Retention policy is not optional. Figures below are measured from a live payload, not
+  estimated (see the Phase 0.5 checkpoint in `docs/ROADMAP.md`):
+  - The bazaar currently returns **2,136 products**, not ~1500 — the catalog has grown
+    since that figure was written. Treat "~1500" elsewhere in this doc as stale by ~40%.
+  - `snapshots` (5-min, Tier A, 150 recipe tags): prune to **7 days** ≈ **44 MB** steady
+    state (measured ~154 bytes/row, 43.2k rows/day). The 80 MB estimate was ~1.8x high.
+  - `hourly`: keep indefinitely. Tier A (150 recipe tags) ≈ **231 MB/year** measured
+    (~184 bytes/row, 3.6k rows/day) — this is the table that grows forever, so it is the
+    one to watch. The 350 MB/year estimate was ~1.5x high.
   - `daily`: keep indefinitely, serves anything older than 90 days
-  - Untiered (all 1500 products at 5-min) would be ~2 GB/year in `hourly` alone. That is
-    the plan we rejected; do not drift back into it by "temporarily" widening coverage.
-- **Deletes count as rows written.** Pruning is not free. Tier A prunes ~300k rows/month
-  against the 50M included on paid — comfortable, but the untiered version would roughly
-  double total write volume. Budget deletes alongside inserts.
+  - Untiered (all 2,136 products at 5-min) would be **32.2 GB/year** in `snapshots` and
+    **3.2 GB/year** in `hourly` alone. That is the plan we rejected; do not drift back
+    into it by "temporarily" widening coverage. (The old ~2 GB/year untiered-hourly
+    estimate was low mainly because it assumed ~1500 products, not 2,136.)
+- **Deletes count as rows written.** Pruning is not free — budget deletes alongside
+  inserts when checking against the 50M/month included.
 - **R2 raw archive sizing** — the full response including `buy_summary`/`sell_summary` is
-  several MB, roughly **300 MB/day gzipped**, which exhausts R2's 10 GB free allowance in
-  about five weeks and keeps growing. Therefore:
+  3.45 MB raw, **481 KB gzipped** (measured, 7.3x compression). Bundled across a full
+  day's 288 cron ticks that's **~135 MB/day gzipped**, which exhausts R2's 10 GB free
+  allowance in **~76 days (~11 weeks)**, not five — the original estimate was ~2.2x too
+  pessimistic. Still keeps growing, so the mitigations stand:
   - Bundle **one object per day**, not 288 per day (operation counts matter as much as bytes)
   - Keep full order books for **14 days**
-  - Beyond 14 days, archive `quick_status` only — about 10% of the size, and still enough
+  - Beyond 14 days, archive `quick_status` only — **measured at 19.3% of the full gzipped
+    size** (~26 MB/day, ~9.3 GB/year), not the ~10% originally assumed, but still enough
     to recompute every derived table
 - **Order books are never stored raw in D1.** 1500 products × ~60 levels = 90k rows per
   snapshot; at 5-minute intervals that is 26M rows/day and D1 will not tolerate it.
@@ -250,11 +268,20 @@ any projection in this file.
    their terms require a Premium+ subscription. This is a real obligation, not a footnote.
 2. **Disclaimer.** Footer must state the site is not affiliated with or endorsed by
    Hypixel or Mojang.
-3. **No secrets in the client bundle.** Any Coflnet account token lives in `.dev.vars`
+3. **Upstream policy compliance.** Hypixel's API policy prohibits commercial use,
+   collection at scale, and proxying the Public API to third-party developers. Being free
+   and open source clears the first only. Practical consequences that bind today:
+   - Poll no faster than the bazaar actually refreshes (~60s). Five minutes is our choice.
+   - Never expose an endpoint that mirrors an upstream response shape. Our API serves
+     *our* computed results.
+   - Any published dataset ships as aggregates, never a verbatim re-emission (see
+     ROADMAP Phase 8).
+   The penalty for getting this wrong is losing API access, which ends the project.
+4. **No secrets in the client bundle.** Any Coflnet account token lives in `.dev.vars`
    locally and Worker secrets in prod. The client calls only `/api/*`.
-4. **No user accounts in v1.** Watchlists go in `localStorage`. Adding auth means handling
+5. **No user accounts in v1.** Watchlists go in `localStorage`. Adding auth means handling
    PII, and that is a different project with different obligations.
-5. **The site gives estimates, not advice.** Every profit figure ships next to its
+6. **The site gives estimates, not advice.** Every profit figure ships next to its
    fill-feasibility caveat. Do not build UI that shows a margin number alone.
 
 ## 8. Domain gotchas worth remembering

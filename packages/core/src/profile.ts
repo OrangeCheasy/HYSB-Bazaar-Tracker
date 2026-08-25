@@ -66,6 +66,12 @@ export interface HourWindow {
   readonly meanIndex: number;
   /** True when the window runs past midnight UTC, e.g. 22:00 to 02:00. */
   readonly wraps: boolean;
+  /**
+   * How many of the window's hours actually had data. Below `lengthHours` means the
+   * score rests on partial evidence — surface it rather than presenting a gap-filled
+   * window as though it were solid.
+   */
+  readonly hoursPresent: number;
 }
 
 function hourOf(ts: number): Hour {
@@ -77,30 +83,60 @@ function hourOf(ts: number): Hour {
 export function computeHourProfile(bars: readonly Bar[]): Result<HourProfile, ProfileError> {
   if (bars.length === 0) return err("empty-series");
 
-  const byHour: Bar[][] = Array.from({ length: 24 }, () => []);
+  // A Map rather than a fixed-length array: indexing an array of 24 yields `Bar[] |
+  // undefined`, so the code would carry an impossible-but-uncoverable branch on every
+  // push. Both sides of `get` here are real — first bar of an hour, versus a later one.
+  const byHour = new Map<number, Bar[]>();
   const days = new Set<number>();
+
   for (const b of bars) {
-    byHour[hourOf(b.ts)]?.push(b);
+    const h = hourOf(b.ts);
+    const group = byHour.get(h);
+    if (group) group.push(b);
+    else byHour.set(h, [b]);
+
     days.add(Math.floor(b.ts / 86_400));
   }
 
-  const askBaseline = mean(bars.map((b) => b.askAvg)) ?? 0;
-  const bidBaseline = mean(bars.map((b) => b.bidAvg)) ?? 0;
+  // Per-hour means first, then the baseline from those means — NOT from the raw bars.
+  // Each populated hour gets one vote regardless of how many samples landed in it, so a
+  // densely-sampled hour cannot drag the baseline toward its own price and make every
+  // other hour look mispriced. Matters because Coflnet coarsens older history, leaving
+  // hours with wildly uneven sample counts.
+  const hourMeans: { readonly ask: number; readonly bid: number; readonly samples: number }[] =
+    [];
+  let askBaseSum = 0;
+  let bidBaseSum = 0;
+  let populated = 0;
+
+  for (let h = 0; h < 24; h++) {
+    const group = byHour.get(h) ?? [];
+    const ask = mean(group.map((b) => b.askAvg)) ?? 0;
+    const bid = mean(group.map((b) => b.bidAvg)) ?? 0;
+    hourMeans.push({ ask, bid, samples: group.length });
+    if (group.length > 0) {
+      askBaseSum += ask;
+      bidBaseSum += bid;
+      populated++;
+    }
+  }
+
+  // `bars` is non-empty, so at least one hour is populated and this cannot divide by zero.
+  const askBaseline = askBaseSum / populated;
+  const bidBaseline = bidBaseSum / populated;
 
   const buckets: HourBucket[] = [];
   for (let h = 0; h < 24; h++) {
-    const group = byHour[h] ?? [];
-    const askMean = mean(group.map((b) => b.askAvg)) ?? 0;
-    const bidMean = mean(group.map((b) => b.bidAvg)) ?? 0;
+    const cell = hourMeans[h] ?? { ask: 0, bid: 0, samples: 0 };
     buckets.push({
       hour: h as Hour,
-      samples: group.length,
-      askMean,
-      bidMean,
-      midMean: (askMean + bidMean) / 2,
+      samples: cell.samples,
+      askMean: cell.ask,
+      bidMean: cell.bid,
+      midMean: (cell.ask + cell.bid) / 2,
       // A zero baseline means a worthless item, not a 100%-cheap hour. Report 0.
-      askIndex: askBaseline === 0 ? 0 : askMean / askBaseline,
-      bidIndex: bidBaseline === 0 ? 0 : bidMean / bidBaseline,
+      askIndex: askBaseline === 0 ? 0 : cell.ask / askBaseline,
+      bidIndex: bidBaseline === 0 ? 0 : cell.bid / bidBaseline,
     });
   }
 
@@ -118,8 +154,11 @@ export function computeHourProfile(bars: readonly Bar[]): Result<HourProfile, Pr
  *
  * The wrap case is the common one: a game server's quiet hours straddle midnight UTC. A
  * search that cannot wrap silently returns the second-best window, which is worse than
- * returning nothing. Windows containing an hour with no data are skipped entirely rather
- * than scored on partial evidence.
+ * returning nothing.
+ *
+ * A window scores on the hours it actually has, provided at least half of them are
+ * populated, and carries `hoursPresent` so a thin result can be marked rather than
+ * silently trusted. See ADR-012.
  */
 export function bestContiguousWindow(
   profile: HourProfile,
@@ -130,21 +169,25 @@ export function bestContiguousWindow(
 
   const index = (b: HourBucket): number => (objective === "min" ? b.bidIndex : b.askIndex);
 
+  // A window scores if at least half its hours have data. Requiring all
+  // of them returns nothing at all on coarsened backfill history, where Coflnet gives
+  // 2-hour buckets and half the hour slots are legitimately empty. The count travels on
+  // the result so a thin window can be marked rather than silently trusted.
+  const required = Math.max(1, Math.floor(lengthHours / 2));
+
   let best: HourWindow | undefined;
   for (let start = 0; start < 24; start++) {
-    const values: number[] = [];
-    let complete = true;
+    let sum = 0;
+    let present = 0;
     for (let k = 0; k < lengthHours; k++) {
       const bucket = profile.buckets[(start + k) % 24];
-      if (!bucket || bucket.samples === 0) {
-        complete = false;
-        break;
-      }
-      values.push(index(bucket));
+      if (!bucket || bucket.samples === 0) continue;
+      sum += index(bucket);
+      present++;
     }
-    if (!complete) continue;
+    if (present < required) continue;
 
-    const meanIndex = mean(values) ?? 0;
+    const meanIndex = sum / present;
     const better =
       best === undefined ||
       (objective === "min" ? meanIndex < best.meanIndex : meanIndex > best.meanIndex);
@@ -154,10 +197,52 @@ export function bestContiguousWindow(
         lengthHours,
         meanIndex,
         wraps: start + lengthHours > 24,
+        hoursPresent: present,
       };
     }
   }
   return best;
+}
+
+/** Which numeric field of an hour bucket to read. */
+export type HourField = "askMean" | "bidMean" | "midMean" | "askIndex" | "bidIndex";
+
+/**
+ * Mean of one field across a named set of hours, ignoring hours with no data.
+ *
+ * Returns `undefined` rather than 0 when none of the requested hours has data, so the
+ * caller can fall back to the current book instead of pricing a craft at zero. (model.py
+ * returns 0.0 and relies on `or last_bid` at the call site; 0 is a legitimate price for a
+ * dead item, so a sentinel that means "no data" must not also be a possible answer.)
+ */
+export function meanOverHours(
+  profile: HourProfile,
+  hours: Iterable<number>,
+  field: HourField,
+): number | undefined {
+  let sum = 0;
+  let count = 0;
+  for (const h of hours) {
+    const bucket = profile.buckets[((h % 24) + 24) % 24];
+    if (!bucket || bucket.samples === 0) continue;
+    sum += bucket[field];
+    count++;
+  }
+  return count === 0 ? undefined : sum / count;
+}
+
+/**
+ * The hours in a window, inclusive of `startHour` and exclusive of `endHour`, wrapping
+ * past midnight. `hourRange(23, 7)` is the default overnight window: 23, 0, 1 … 6.
+ *
+ * A start equal to the end means the whole day, not an empty window — "23 to 23" is 24
+ * hours of unattended orders, which is the reading that matches how people describe it.
+ */
+export function hourRange(startHour: number, endHour: number): Hour[] {
+  const start = ((Math.trunc(startHour) % 24) + 24) % 24;
+  const end = ((Math.trunc(endHour) % 24) + 24) % 24;
+  const span = start === end ? 24 : ((end - start + 24) % 24) + 0;
+  return Array.from({ length: span }, (_, i) => ((start + i) % 24) as Hour);
 }
 
 /**

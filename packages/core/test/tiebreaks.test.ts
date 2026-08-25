@@ -133,7 +133,7 @@ describe("fill feasibility at the degenerate boundary", () => {
       recipe: RECIPE,
       base,
       product,
-      market: { sellTaxRate: 0.0125, captureFraction: 0 },
+      market: { sellTaxRate: 0.0125, captureFraction: 0, tick: 0.1 },
       asOf: base.to,
     });
     expect(r.ok).toBe(true);
@@ -177,15 +177,15 @@ describe("fill feasibility at the degenerate boundary", () => {
       recipe: RECIPE,
       base: dead,
       product,
-      market: { sellTaxRate: 0.0125, captureFraction: 0.1 },
+      market: { sellTaxRate: 0.0125, captureFraction: 0.1, tick: 0.1 },
       asOf: dead.to,
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.scenarios.orders.fillFeasibility).toBe(0);
-    expect(r.value.scenarios.mixed.fillFeasibility).toBe(0);
-    expect(r.value.flags).toContain("thin-base-volume");
-    expect(r.value.flags).toContain("thin-product-volume");
+    expect(r.value.scenarios.timed.fillFeasibility).toBe(0);
+    expect(r.value.flags).toContain("product-rarely-instant-bought");
+    expect(r.value.flags).toContain("slow-fill");
   });
 
   it("rejects a non-finite ratio the same way it rejects zero", () => {
@@ -194,7 +194,7 @@ describe("fill feasibility at the degenerate boundary", () => {
       recipe: { ...RECIPE, ratio: Number.NaN },
       base,
       product: base,
-      market: { sellTaxRate: 0.0125, captureFraction: 0.1 },
+      market: { sellTaxRate: 0.0125, captureFraction: 0.1, tick: 0.1 },
       asOf: base.to,
     });
     expect(r.ok === false && r.error).toBe("zero-ratio");

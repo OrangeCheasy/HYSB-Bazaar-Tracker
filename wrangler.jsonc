@@ -55,6 +55,11 @@
 		{
 			"binding": "ARCHIVE",
 			"bucket_name": "bazaar-archive"
+		},
+		{
+			"bucket_name": "bazaar-archive",
+			"binding": "bazaar_archive",
+			"remote": true
 		}
 	],
 	"vars": {

@@ -1,4 +1,9 @@
 import type { Env } from "../index.js";
+import { handleCraft } from "./craft.js";
+import { handleItemHistory, handleItemHours, handleItemStats } from "./item.js";
+import { handleRecipes } from "./recipes.js";
+import { handleScan } from "./scan.js";
+import { handleStatus } from "./status.js";
 
 /**
  * Standard response envelope. Every payload states how old it is — users making trades
@@ -12,12 +17,18 @@ export interface Meta {
   source: "kv" | "d1" | "worker";
 }
 
-export function json<T>(data: T, meta: Meta, status = 200): Response {
+/**
+ * `cacheControl` has no default on purpose: every route below sets one deliberately,
+ * with a comment explaining why that TTL and not another (task requirement, and
+ * CLAUDE.md's "every response states how old it is" extends to how long a cache is
+ * allowed to keep serving it).
+ */
+export function json<T>(data: T, meta: Meta, status: number, cacheControl: string): Response {
   return new Response(JSON.stringify({ data, meta }), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=30",
+      "cache-control": cacheControl,
     },
   });
 }
@@ -49,16 +60,52 @@ export async function handleApi(
     return errorResponse("method not allowed", 405);
   }
 
-  switch (url.pathname) {
-    case "/api/health": {
-      const now = Math.floor(Date.now() / 1000);
-      return json(
-        { ok: true, environment: env.ENVIRONMENT },
-        { generatedAt: now, staleAfter: now + 30, source: "worker" },
-      );
-    }
+  // Split routing rather than a switch on the full pathname: three routes carry a path
+  // parameter (`/api/item/:tag`, `/api/item/:tag/history`, `/api/item/:tag/hours`,
+  // `/api/craft/:baseTag`), and a switch on the literal string can't express those.
+  const segments = url.pathname.split("/").filter(Boolean); // ["api", "item", "TAG", ...]
 
-    default:
-      return errorResponse("not found", 404);
+  if (segments[0] !== "api") return errorResponse("not found", 404);
+
+  if (segments.length === 2 && segments[1] === "health") {
+    const now = Math.floor(Date.now() / 1000);
+    return json(
+      { ok: true, environment: env.ENVIRONMENT },
+      { generatedAt: now, staleAfter: now + 30, source: "worker" },
+      200,
+      // Static payload, no upstream data behind it — a generous TTL costs nothing and
+      // this is the one route a status page might poll often.
+      "public, max-age=30",
+    );
   }
+
+  if (segments.length === 2 && segments[1] === "scan") {
+    return handleScan(url, env);
+  }
+
+  if (segments.length === 2 && segments[1] === "recipes") {
+    return handleRecipes(env);
+  }
+
+  if (segments.length === 2 && segments[1] === "status") {
+    return handleStatus(env);
+  }
+
+  if (segments.length === 3 && segments[1] === "item") {
+    return handleItemStats(decodeURIComponent(segments[2] ?? ""), env);
+  }
+
+  if (segments.length === 4 && segments[1] === "item" && segments[3] === "history") {
+    return handleItemHistory(decodeURIComponent(segments[2] ?? ""), url, env);
+  }
+
+  if (segments.length === 4 && segments[1] === "item" && segments[3] === "hours") {
+    return handleItemHours(decodeURIComponent(segments[2] ?? ""), url, env);
+  }
+
+  if (segments.length === 3 && segments[1] === "craft") {
+    return handleCraft(decodeURIComponent(segments[2] ?? ""), url, env);
+  }
+
+  return errorResponse("not found", 404);
 }

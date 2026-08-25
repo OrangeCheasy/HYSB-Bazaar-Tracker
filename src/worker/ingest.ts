@@ -1,22 +1,186 @@
+import {
+  assignDepthToSides,
+  computeDepthMetrics,
+  err,
+  isWellFormed,
+  normalizeMany,
+  normalizeQuickStatus,
+  ok,
+  type NormalizeError,
+  type RawOrderLevel,
+  type RawQuickStatus,
+  type Result,
+} from "@core/index.js";
+import { writeTickArchive } from "./archive.js";
+import { buildProductsUpsert, type ProductRow } from "./db/products.js";
+import { buildSnapshotsUpsert, type SnapshotRow } from "./db/snapshots.js";
+import { buildHourlyIncrementalUpsert, type HourlyIncrementalRow } from "./db/hourly.js";
+import { computeTierA } from "./db/tiers.js";
 import { recordRun } from "./db/runs.js";
 import type { Env } from "./index.js";
 
-/**
- * Phase 2. Pull the single Hypixel bazaar call (~1500 products, no API key) and write
- * one row per product into `snapshots`.
- *
- * When implementing, mind CLAUDE.md §3: never loop INSERT per product. Build multi-row
- * INSERTs chunked by BOUND PARAMETER count (cap 100 per query), not by row count.
- *
- * This is the ONLY place api.hypixel.net may be called from.
- */
+/** The only place api.hypixel.net may be called from — CLAUDE.md section 2. */
+
+export interface RawBazaarProduct {
+  readonly product_id: string;
+  readonly sell_summary: readonly RawOrderLevel[];
+  readonly buy_summary: readonly RawOrderLevel[];
+  readonly quick_status?: RawQuickStatus;
+}
+
+export interface RawBazaarResponse {
+  readonly success: boolean;
+  readonly lastUpdated: number;
+  readonly products: Record<string, RawBazaarProduct>;
+}
+
+export interface NormalizedProduct {
+  readonly tag: string;
+  readonly sellMovingWeek: number;
+  readonly point: ReturnType<typeof normalizeQuickStatus>;
+  readonly askDepthMetrics: ReturnType<typeof computeDepthMetrics>;
+  readonly bidDepthMetrics: ReturnType<typeof computeDepthMetrics>;
+}
+
+export function normalizeProduct(
+  entry: readonly [string, RawBazaarProduct],
+  ts: number,
+): Result<NormalizedProduct, NormalizeError> {
+  const [tag, raw] = entry;
+  if (!raw.quick_status) return err("missing-field");
+
+  const point = normalizeQuickStatus(ts, raw.quick_status);
+  if (!isWellFormed(point)) return err("crossed-book");
+
+  const buyMetrics = computeDepthMetrics(raw.buy_summary ?? []);
+  const sellMetrics = computeDepthMetrics(raw.sell_summary ?? []);
+  const { ask, bid } = assignDepthToSides(point, raw.quick_status, buyMetrics, sellMetrics);
+
+  return ok({
+    tag,
+    sellMovingWeek: raw.quick_status.sellMovingWeek,
+    point,
+    askDepthMetrics: ask,
+    bidDepthMetrics: bid,
+  });
+}
+
 export async function runIngest(env: Env): Promise<void> {
   const startedAt = Math.floor(Date.now() / 1000);
   const t0 = Date.now();
 
-  console.warn("ingest: not implemented yet (Phase 2)");
+  try {
+    const res = await fetch(env.HYPIXEL_BAZAAR_URL);
+    if (!res.ok) throw new Error(`hypixel returned ${res.status}`);
+    const rawJson = await res.text();
+    const data = JSON.parse(rawJson) as RawBazaarResponse;
+    const entries = Object.entries(data.products);
 
-  await recordRun(env, "ingest", startedAt, Date.now() - t0, {
-    error: "not implemented",
-  });
+    const { ok: normalized, skipped } = normalizeMany(entries, (entry) =>
+      normalizeProduct(entry, startedAt),
+    );
+
+    // Tier A = recipe tags (base_tag UNION ench_tag) plus top ~500 by sellMovingWeek,
+    // recomputed every tick — CLAUDE.md section 2. Never a static list, never a migration.
+    const recipeRows = await env.DB.prepare("SELECT base_tag, ench_tag FROM recipes")
+      .all<{ base_tag: string; ench_tag: string }>();
+    const recipeTags = new Set<string>();
+    for (const r of recipeRows.results) {
+      recipeTags.add(r.base_tag);
+      recipeTags.add(r.ench_tag);
+    }
+    const bySellMovingWeekDesc = [...normalized]
+      .sort((a, b) => b.sellMovingWeek - a.sellMovingWeek)
+      .map((p) => p.tag);
+    const tierA = computeTierA([...recipeTags], bySellMovingWeekDesc, 500);
+
+    const productRows: ProductRow[] = [];
+    const snapshotRows: SnapshotRow[] = [];
+    const hourlyRows: HourlyIncrementalRow[] = [];
+    const hourTs = Math.floor(startedAt / 3600) * 3600;
+
+    for (const p of normalized) {
+      const tier = tierA.has(p.tag) ? "A" : "B";
+      productRows.push({
+        tag: p.tag,
+        isEnchanted: p.tag.startsWith("ENCHANTED_"),
+        tier,
+        ts: startedAt,
+      });
+
+      if (tier === "A") {
+        snapshotRows.push({
+          tag: p.tag,
+          ts: startedAt,
+          ask: p.point.ask,
+          bid: p.point.bid,
+          askDepth: p.point.askDepth,
+          bidDepth: p.point.bidDepth,
+          ibWeek: p.point.ibWeek,
+          isWeek: p.point.isWeek,
+          askDepth1pct: p.askDepthMetrics.depth1pct,
+          bidDepth1pct: p.bidDepthMetrics.depth1pct,
+          askDepth5pct: p.askDepthMetrics.depth5pct,
+          bidDepth5pct: p.bidDepthMetrics.depth5pct,
+          askMaxWall: p.askDepthMetrics.maxWall,
+          bidMaxWall: p.bidDepthMetrics.maxWall,
+          askOrderCount: p.askDepthMetrics.orderCount,
+          bidOrderCount: p.bidDepthMetrics.orderCount,
+        });
+      } else {
+        hourlyRows.push({
+          tag: p.tag,
+          hourTs,
+          ask: p.point.ask,
+          bid: p.point.bid,
+          askDepth: p.point.askDepth,
+          bidDepth: p.point.bidDepth,
+          ibWeek: p.point.ibWeek,
+          isWeek: p.point.isWeek,
+          tickTs: startedAt,
+        });
+      }
+    }
+
+    let rowsWritten = 0;
+    const productStmts = buildProductsUpsert(env.DB, productRows);
+    if (productStmts.length > 0) {
+      await env.DB.batch(productStmts);
+      rowsWritten += productRows.length;
+    }
+    const snapshotStmts = buildSnapshotsUpsert(env.DB, snapshotRows);
+    if (snapshotStmts.length > 0) {
+      await env.DB.batch(snapshotStmts);
+      rowsWritten += snapshotRows.length;
+    }
+    const hourlyStmts = buildHourlyIncrementalUpsert(env.DB, hourlyRows);
+    if (hourlyStmts.length > 0) {
+      await env.DB.batch(hourlyStmts);
+      rowsWritten += hourlyRows.length;
+    }
+
+    await writeTickArchive(env, startedAt, rawJson);
+
+    // Skips are expected, routine behaviour (ROADMAP Phase 2: "a product with a missing
+    // quick_status must be skipped, not fatal"), not run failures — recordRun's `error`
+    // column stays null for these. Logged instead, so they're visible in `wrangler tail`
+    // without a schema change (RunResult has no dedicated skip-count columns yet).
+    if (skipped.length > 0) {
+      const missingQuickStatus = skipped.filter((s) => s.error === "missing-field").length;
+      const crossedBooks = skipped.filter((s) => s.error === "crossed-book").length;
+      console.warn(
+        `ingest: skipped ${skipped.length}/${entries.length} products ` +
+          `(missing quick_status: ${missingQuickStatus}, crossed book: ${crossedBooks})`,
+      );
+    }
+
+    await recordRun(env, "ingest", startedAt, Date.now() - t0, {
+      productsSeen: entries.length,
+      rowsWritten,
+    });
+  } catch (e) {
+    await recordRun(env, "ingest", startedAt, Date.now() - t0, {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
 }

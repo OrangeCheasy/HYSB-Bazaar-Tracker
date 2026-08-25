@@ -47,6 +47,16 @@
 			"remote": true
 		}
 	],
+	// Bucket must exist before this binding works: `npx wrangler r2 bucket create
+	// bazaar-archive`. Raw order-book archive, one small object per ingest tick under
+	// archive/{YYYY-MM-DD}/{HHmm}.json.gz — see CLAUDE.md section 3 for the retention
+	// policy (full order books 14 days, quick_status only beyond).
+	"r2_buckets": [
+		{
+			"binding": "ARCHIVE",
+			"bucket_name": "bazaar-archive"
+		}
+	],
 	"vars": {
 		"ENVIRONMENT": "production",
 		"HYPIXEL_BAZAAR_URL": "https://api.hypixel.net/v2/skyblock/bazaar"

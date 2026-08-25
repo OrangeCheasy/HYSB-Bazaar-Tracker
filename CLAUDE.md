@@ -144,15 +144,28 @@ Verified against Cloudflare docs; re-check before assuming.
 - **Deletes count as rows written.** Pruning is not free — budget deletes alongside
   inserts when checking against the 50M/month included.
 - **R2 raw archive sizing** — the full response including `buy_summary`/`sell_summary` is
-  3.45 MB raw, **481 KB gzipped** (measured, 7.3x compression). Bundled across a full
-  day's 288 cron ticks that's **~135 MB/day gzipped**, which exhausts R2's 10 GB free
-  allowance in **~76 days (~11 weeks)**, not five — the original estimate was ~2.2x too
-  pessimistic. Still keeps growing, so the mitigations stand:
-  - Bundle **one object per day**, not 288 per day (operation counts matter as much as bytes)
-  - Keep full order books for **14 days**
+  3.45 MB raw, **481 KB gzipped** (measured, 7.3x compression). Across a full day's 288
+  cron ticks that's **~135 MB/day gzipped**, which exhausts R2's 10 GB free allowance in
+  **~76 days (~11 weeks)**, not five — the original estimate was ~2.2x too pessimistic.
+  Still keeps growing, so the mitigations stand:
+  - **One small object per tick** (`archive/{YYYY-MM-DD}/{HHmm}.json.gz`), **not** one
+    bundled object per day as this section previously said — see ADR-016. Bundling
+    collides with two hard platform limits: R2 multipart uploads need a 5MB minimum part
+    size (one tick's ~481KB gzipped payload is 10x too small to be its own part), and
+    Workers isolates cap at 128MB memory, unsafe for holding a growing ~136MB/day blob to
+    decompress/re-upload every 5 minutes. At 288 writes/day, per-tick objects cost ~0.9%
+    of R2's 1,000,000/month free Class A operation allowance — the "operation counts
+    matter" concern that originally motivated daily bundling isn't actually binding at
+    this volume.
+  - Keep full order books for **14 days**; a daily job downgrades one day's ticks to
+    `quick_status`-only once they cross that age (`src/worker/archive.ts`,
+    `pruneArchiveDetail`), rather than deciding full-vs-reduced at write time
   - Beyond 14 days, archive `quick_status` only — **measured at 19.3% of the full gzipped
     size** (~26 MB/day, ~9.3 GB/year), not the ~10% originally assumed, but still enough
     to recompute every derived table
+  - The literal "one object per day" artifact, if wanted for public dataset dumps, is an
+    offline consolidation step at Phase 8 time (already gated behind 30 clean days),
+    built against real R2 data instead of guessed batching logic today
 - **Order books are never stored raw in D1.** 1500 products × ~60 levels = 90k rows per
   snapshot; at 5-minute intervals that is 26M rows/day and D1 will not tolerate it.
   Compute depth metrics at ingest — depth within 1% and 5% of top of book, largest single

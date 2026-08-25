@@ -104,7 +104,7 @@ Deliverables:
 - `rollup.ts`: hourly, daily, retention pruning per tier
 - `event.cron` branching in `scheduled`
 - Nightly `wrangler d1 info`-equivalent size check recorded into `runs`
-
+ 
 Watch for:
 - Chunk inserts by **bound parameter count** (cap 100/query), not row count
 - Deletes count as rows written — budget pruning alongside inserts

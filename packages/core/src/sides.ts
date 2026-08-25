@@ -446,6 +446,79 @@ export function aggregate(
 }
 
 /**
+ * Bucket Bars into coarser intervals (`hourly` -> `daily`). This is NOT aggregate() over
+ * Bar.askAvg as if it were a Point's ask — that would silently discard each bar's real
+ * min/max range and mis-weight the merge whenever bars carry different `samples` counts
+ * (an hour built from 2 snapshots must not out-vote one built from 12). Kept here for the
+ * same reason aggregate() is: src/worker/rollup.ts should be nothing but SQL and plumbing.
+ */
+export function aggregateBars(
+  bars: readonly Bar[],
+  intervalSeconds: number,
+): readonly Bar[] {
+  if (intervalSeconds <= 0 || bars.length === 0) return [];
+
+  const buckets = new Map<number, Bar[]>();
+  for (const b of bars) {
+    const key = Math.floor(b.ts / intervalSeconds) * intervalSeconds;
+    const existing = buckets.get(key);
+    if (existing) existing.push(b);
+    else buckets.set(key, [b]);
+  }
+
+  const out: Bar[] = [];
+  for (const key of [...buckets.keys()].sort((a, b) => a - b)) {
+    const group = buckets.get(key);
+    if (!group || group.length === 0) continue;
+    const ordered = [...group].sort((a, b) => a.ts - b.ts);
+    const last = ordered[ordered.length - 1];
+    if (!last) continue;
+
+    let totalSamples = 0;
+    let askAvgWeighted = 0;
+    let bidAvgWeighted = 0;
+    let depthAskWeighted = 0;
+    let depthBidWeighted = 0;
+    let askMin = Number.POSITIVE_INFINITY;
+    let askMax = Number.NEGATIVE_INFINITY;
+    let bidMin = Number.POSITIVE_INFINITY;
+    let bidMax = Number.NEGATIVE_INFINITY;
+    let allCoflnet = true;
+
+    for (const b of ordered) {
+      totalSamples += b.samples;
+      askAvgWeighted += b.askAvg * b.samples;
+      bidAvgWeighted += b.bidAvg * b.samples;
+      depthAskWeighted += b.askDepth * b.samples;
+      depthBidWeighted += b.bidDepth * b.samples;
+      if (b.askMin < askMin) askMin = b.askMin;
+      if (b.askMax > askMax) askMax = b.askMax;
+      if (b.bidMin < bidMin) bidMin = b.bidMin;
+      if (b.bidMax > bidMax) bidMax = b.bidMax;
+      if (b.source !== "coflnet") allCoflnet = false;
+    }
+
+    out.push({
+      ts: key,
+      intervalSeconds,
+      askAvg: askAvgWeighted / totalSamples,
+      askMin,
+      askMax,
+      bidAvg: bidAvgWeighted / totalSamples,
+      bidMin,
+      bidMax,
+      askDepth: depthAskWeighted / totalSamples,
+      bidDepth: depthBidWeighted / totalSamples,
+      ibWeek: last.ibWeek,
+      isWeek: last.isWeek,
+      samples: totalSamples,
+      source: allCoflnet ? "coflnet" : "hypixel",
+    });
+  }
+  return out;
+}
+
+/**
  * Bulk normalize, keeping the good and reporting the bad. Hypixel occasionally returns a
  * product with a missing quick_status; one bad product must not abort a whole ingest run
  * (ROADMAP Phase 2).

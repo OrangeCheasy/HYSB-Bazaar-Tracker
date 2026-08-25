@@ -84,6 +84,13 @@ reusable-systems discipline that makes a multi-project studio work.
 ---
 
 ## Phase 2 — Data layer and ingestion
+**Status: deployed and ingesting; Done-when not yet met.** Remote D1 migrated, R2
+bucket created, cron live. Ingest and rollup have run clean since the 2026-08-25 18:10
+deploy, and `archive/2026-08-25/*.json.gz` objects are real. The 48-hour zero-error
+window has **not** started: `precompute` still errors every hour (production runs `main`,
+which predates Phase 4), and since that same deploy every cron fires twice ~54s apart.
+Both are tracked in `TODO.md`.
+
 **Goal:** the cron fills D1 with real bazaar history, forever, without falling over.
 **Effort:** 2–3 evenings
 
@@ -94,7 +101,9 @@ Coflnet would give you for the same window.
 
 Deliverables:
 - Migrations for `products`, `recipes`, `snapshots`, `hourly`, `daily`, `runs`
-- Tier assignment: a tag is Tier A if referenced by a recipe, else Tier B (CLAUDE.md §2).
+- Tier assignment: a tag is Tier A if referenced by a recipe **or** in the top ~500 by
+  `sellMovingWeek`, else Tier B (CLAUDE.md §2). This line previously said recipe tags
+  only, which is narrower than what was built — production carries 501 Tier A tags.
   Config-driven, re-evaluated each run, never a migration
 - `ingest.ts`: one fetch, normalize via `packages/core`, tier split, chunked multi-row
   insert. Tier A → `snapshots`; Tier B → `hourly` directly
@@ -122,6 +131,12 @@ broken the ingest and confirmed `runs` recorded the failure.
 ---
 
 ## Phase 3 — Historical backfill
+**Status: deferred by decision, 2026-08-25.** Not skipped for lack of time — deferring is
+free and delaying Phase 2 is not. Coflnet's history stays available; our own five-minute
+history exists only if the cron was running at the time. So production ingestion went
+first. `scripts/backfill.ts` is still a stub. Revisit before Phase 5 puts hour-of-day
+charts in front of users. See ADR in `docs/DECISIONS.md`.
+
 **Goal:** seed enough history for hour-of-day profiling. That is all it is for now.
 **Effort:** 1 evening
 
@@ -157,6 +172,14 @@ re-running the script is a no-op rather than a duplicate.
 ---
 
 ## Phase 4 — API and precompute
+**Status: code complete on branch `v0.4`, NOT deployed.** All seven endpoints, the KV
+precompute, the per-route `Cache-Control` reasoning and a stale-data test per endpoint
+are built; `npm test` is 210 green across 20 files and `npm run typecheck` is clean.
+Production still runs `main`, which predates this work — its `precompute` records
+`error: 'not implemented'` on every hourly cron, so `scan:default:v1` has never been
+written and `/api/scan` has no warm KV path to measure. The Done-when below stays open
+until `v0.4` is merged and deployed.
+
 **Goal:** fast, cheap, honest endpoints.
 **Effort:** 2 evenings
 

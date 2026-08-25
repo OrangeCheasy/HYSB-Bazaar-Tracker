@@ -4,12 +4,16 @@ Copy-paste prompts for Claude Code, one per phase. `CLAUDE.md` loads automatical
 these deliberately do **not** repeat the architecture — restating it wastes context and
 invites contradictions between two sources of truth.
 
+Prompts for phases 0, 0.5, 1, 2 and 4 have been deleted — that work is built and its
+tests pass. What remains below is what has not been built. Phase 4's *deployment* is
+still outstanding even though its code is done; that is tracked in `TODO.md`, not here.
+
 ## How to run these well
 
 - **One phase per session.** Start a fresh session between phases; `/clear` when a phase
   is done. Long sessions accumulate stale context and the model starts optimizing for
   things you fixed an hour ago.
-- **Ask for a plan first on the big phases** (1, 2, 5). Read the plan, correct it, *then*
+- **Ask for a plan first on the big phases** (5, 6). Read the plan, correct it, *then*
   say build. Correcting a plan costs one message; correcting an implementation costs an
   evening.
 - **Commit at every checkpoint.** These prompts mark them. A checkpoint you can revert to
@@ -20,177 +24,17 @@ invites contradictions between two sources of truth.
 
 ---
 
-## Phase 0 — Scaffold
-
-```
-Set up the repo scaffold described in docs/ROADMAP.md Phase 0.
-
-npm workspaces monorepo: packages/core, web, and a root Cloudflare Worker.
-TypeScript strict everywhere with a shared tsconfig.base.json, including
-noUncheckedIndexedAccess. Vitest for packages/core. ESLint + Prettier.
-
-Create wrangler.jsonc with: static assets from dist/client with
-not_found_handling single-page-application and run_worker_first for /api/*,
-a D1 binding named DB, a KV binding named CACHE, and cron triggers. Leave
-database_id and KV id as clearly-marked placeholders — I'll create the
-resources and fill them in.
-
-Add a GitHub Actions workflow that runs typecheck, lint, and test on push
-and PR. Do not add a deploy workflow yet.
-
-Give me the exact wrangler CLI commands to create the D1 database and KV
-namespace, in the order I should run them.
-
-Before writing anything, show me the file tree you plan to create.
-```
-
-**Checkpoint:** `npm run typecheck && npm run lint && npm test` all pass. Commit.
-
----
-
-## Phase 0.5 — Measure the payload
-
-```
-Write a throwaway Node script (scripts/spike-measure.ts, delete it after) that
-fetches https://api.hypixel.net/v2/skyblock/bazaar once and reports:
-
-- content-length raw and gzipped
-- product count, and how many include buy_summary / sell_summary
-- median JSON.parse wall time over 10 runs
-- serialized byte size of a single quick_status row, and of one full
-  product including order books
-- projected snapshots / hourly / R2 growth per day, month and year, for
-  Tier A (~150 recipe tags) and for all products
-
-Print it as a table. Then update the sizing figures in CLAUDE.md section 3
-with the measured numbers and tell me which of my estimates were wrong and
-by how much.
-
-If median parse time is anywhere near 10ms, say so explicitly — that's the
-number deciding whether Workers Paid is genuinely required.
-```
-
-**Checkpoint:** CLAUDE.md now contains your numbers, not estimates. Delete the script.
-
----
-
-## Phase 1 — Domain core
-
-Run this in two prompts. The first is planning only.
-
-First: copy the Python tool into the repo at `reference/bzcraft/` and commit it.
-Claude Code can only read files inside the working directory, so the port
-prompt below depends on those files being there. Keep them after the port —
-they're your independent check when a number looks wrong six months from now.
-
-```
-Read reference/bzcraft/model.py — the Python implementation we're porting.
-reference/bzcraft/bzcraft.py shows how it's called end to end, and
-README.md explains the market model behind it.
-
-Plan the port to packages/core as five modules: sides, stats, profile,
-economics, recipes. For each, give me the exported types and function
-signatures only — no implementations yet.
-
-Pay particular attention to how you'll represent the ask/bid derivation
-described in CLAUDE.md section 1, and where the seam is between "normalize
-raw upstream shape" and "compute over normalized points". Those must be
-separate so we can feed the same stats code from Hypixel, from Coflnet, and
-from our own D1 rows without three code paths.
-
-Flag anything in the Python that you think is wrong or that won't translate
-cleanly. I'd rather fix a modelling mistake now than port it faithfully.
-```
-
-Then, after reviewing:
-
-```
-Implement the plan. Write tests first for each module, then the
-implementation.
-
-Required tests, non-negotiable:
-- test/sides.test.ts: build a normal series, then a second series with buy
-  and sell swapped along with their min/max/Volume/MovingWeek counterparts.
-  Assert the resulting Stats objects are deeply equal. Comment it clearly as
-  a load-bearing regression test.
-- Property test: every normalized point satisfies ask >= bid, for arbitrary
-  input including degenerate cases.
-- Hand-computed known-value tests for all three economics scenarios. Show me
-  the arithmetic in a comment so I can verify it independently.
-- Edge cases: single point, zero volume, missing min/max, ask == bid.
-
-packages/core must import nothing outside itself and vitest. No fetch, no
-node:, no cloudflare:.
-
-Run the tests and show me the real output.
-```
-
-**Checkpoint:** inversion test green, >90% coverage. Commit. This is the most important
-commit in the project.
-
----
-
-## Phase 2 — Ingestion
-
-```
-Build Phase 2 from docs/ROADMAP.md: D1 schema, ingest, rollup, pruning.
-
-Start with the migrations. Show me the schema before implementing anything
-against it — include your index choices and the reasoning, since query
-patterns are (a) latest snapshot for all tags, (b) hourly series for one tag
-over a range, (c) hour-of-day aggregation for one tag over N days.
-
-Then ingest.ts: one fetch to Hypixel's bazaar endpoint, normalize through
-packages/core, chunked multi-row insert into snapshots.
-
-Constraints that will break this if ignored:
-- D1 caps bound parameters at 100 per query. Chunk by parameter count, not
-  row count.
-- A product with a missing quick_status must be skipped, not fatal.
-- Ingest must be idempotent — a retry at the same timestamp upserts.
-- Record every run in a runs table: ts, products seen, rows written,
-  duration ms, error text.
-
-Implement the tier split from CLAUDE.md section 2: Tier A (tags referenced
-by a recipe) gets 5-minute snapshots; Tier B gets an hourly row only, no
-snapshots. Tier membership is derived from the recipes table each run — it
-must never require a migration to change.
-
-Order books: compute depth metrics at ingest (depth within 1% and 5% of top
-of book, largest single wall, order count) and store only those in D1. The
-raw buy_summary/sell_summary go to R2 under the archive policy in CLAUDE.md
-section 3 — one object per DAY, not per run.
-
-Then rollup.ts: snapshots→hourly, hourly→daily, and retention pruning per
-tier. Branch on event.cron in the scheduled handler.
-
-Integrity requirements, per CLAUDE.md section 3b — these matter more than
-the storage math because gaps are unrecoverable:
-- every run writes to runs, success or failure
-- hourly.samples must reflect actual snapshot count; never fabricate a
-  full-sample row from partial data
-- the nightly cron records current database size into runs so growth is
-  measured over time
-
-Write a local test that runs ingest against a saved fixture of the Hypixel
-response so we're not hitting the live API in tests. Save the fixture to
-test/fixtures/ — reuse the response from the Phase 0.5 spike.
-```
-
-**Checkpoint:** run `npx wrangler dev --test-scheduled` and hit the scheduled endpoint;
-inspect local D1 with `wrangler d1 execute bazaar --local --command "select * from runs"`.
-Then deliberately break the ingest and confirm `runs` records the failure.
-
-**Then deploy it and leave it running.** Don't wait until the site is built — every day of
-delay is a day of history you can't get back. Come back to Phase 3 in a week or three
-while it quietly accumulates.
-
----
-
 ## Phase 3 — Backfill
 
-First ask whether you still need this — see the scope check in ROADMAP Phase 3. If the
-Phase 2 cron has been running three weeks, hour-of-day profiling may already work.
+**Deliberately deferred, not forgotten** (2026-08-25). Coflnet's history is their
+archive — it will still be there next month, whereas every hour our own cron is not
+running is history we cannot recover. So ingestion went to production first and this
+waits. `scripts/backfill.ts` is still the 38-line stub that prints "not implemented".
+
+Do this before Phase 5 ships hour-of-day charts to real users, or sooner if the scope
+check in ROADMAP Phase 3 says our own `hourly` coverage still cannot support a profile.
+Deferring costs nothing structurally: `hourly.source` already exists and defaults to
+`'hypixel'`, so coflnet rows drop in later with no migration.
 
 ```
 Build scripts/backfill.ts per docs/ROADMAP.md Phase 3.
@@ -220,31 +64,6 @@ minute run and I want to know that before it starts.
 ```
 
 **Checkpoint:** dry-run first, always. Then run for real and spot-check a few tags.
-
----
-
-## Phase 4 — API
-
-```
-Build the API layer per docs/ROADMAP.md Phase 4.
-
-Route handlers stay thin — all math comes from packages/core, all SQL from
-src/worker/db/. A handler that contains a formula is a bug.
-
-precompute.ts writes the default-parameter scan to KV on each rollup cron.
-/api/scan with default params is then a single KV read. Non-default
-parameters recompute from hourly in D1.
-
-Every response is { data, meta: { generatedAt, staleAfter, source } }. Set
-Cache-Control deliberately per route and tell me your reasoning for each.
-
-/api/status exposes last ingest time, data age, and row counts. Public.
-
-Add a test per endpoint covering the stale-data case — I want to see that
-meta is still correct when the cron hasn't run recently.
-```
-
-**Checkpoint:** `curl` every endpoint. Confirm `/api/scan` is fast and `meta` is honest.
 
 ---
 

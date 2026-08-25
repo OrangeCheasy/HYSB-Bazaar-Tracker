@@ -8,12 +8,17 @@
 CREATE TABLE products (
   tag           TEXT PRIMARY KEY,
   is_enchanted  INTEGER NOT NULL DEFAULT 0,
+  -- 'A' = referenced by a recipe: 5-min snapshots + hourly forever.
+  -- 'B' = everything else: hourly only, pruned to 90d then rolled to daily.
+  -- Derived from `recipes` on every ingest run. Changing a tier is a config
+  -- outcome, never a migration. See CLAUDE.md section 2.
+  tier          TEXT NOT NULL DEFAULT 'B',
   first_seen    INTEGER NOT NULL,
   last_seen     INTEGER NOT NULL
 );
 
--- No FK to products(tag) on purpose: recipes are seeded by hand before ingest has ever
--- populated products, and a recipe for a delisted item is still worth keeping around.
+CREATE INDEX idx_products_tier ON products (tier);
+
 CREATE TABLE recipes (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   base_tag     TEXT NOT NULL,
@@ -36,6 +41,11 @@ CREATE TABLE snapshots (
   bid_depth  REAL NOT NULL,   -- units resting in buy orders (queue ahead of your order)
   ib_week    REAL NOT NULL,   -- units instant-bought, trailing week
   is_week    REAL NOT NULL,   -- units instant-sold, trailing week (fills YOUR buy orders)
+  -- Order book depth, computed at ingest. Raw buy_summary/sell_summary go to R2 --
+  -- storing them here would be 26M rows/day and D1 will not tolerate it.
+  depth_1pct REAL,            -- units within 1% of top of book
+  depth_5pct REAL,            -- units within 5% of top of book
+  max_wall   REAL,            -- largest single order, for manipulation detection
   PRIMARY KEY (tag, ts)
 ) WITHOUT ROWID;
 
@@ -55,6 +65,9 @@ CREATE TABLE hourly (
   bid_depth REAL NOT NULL,
   ib_week   REAL NOT NULL,
   is_week   REAL NOT NULL,
+  -- How many snapshots built this row. 12 is a full hour at 5-min resolution.
+  -- Must be honest: never fabricate a full-sample row from partial data. The API
+  -- surfaces this so low-confidence hours are visible rather than silently averaged.
   samples   INTEGER NOT NULL,
   source    TEXT NOT NULL DEFAULT 'hypixel',  -- 'hypixel' | 'coflnet' (backfill)
   PRIMARY KEY (tag, hour_ts)
@@ -78,8 +91,6 @@ CREATE TABLE daily (
   PRIMARY KEY (tag, day_ts)
 ) WITHOUT ROWID;
 
-CREATE INDEX idx_daily_day_ts ON daily (day_ts);
-
 -- You cannot debug a cron you cannot see.
 CREATE TABLE runs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,9 +99,9 @@ CREATE TABLE runs (
   duration_ms   INTEGER,
   products_seen INTEGER,
   rows_written  INTEGER,
+  rows_deleted  INTEGER,          -- deletes count toward D1 write quota; track them
+  db_size_bytes INTEGER,          -- recorded nightly, so growth is measured not guessed
   error         TEXT
 );
 
--- Composite, not (started_at) alone: the query you actually run is "last N ingest runs",
--- which needs kind as the leading column.
-CREATE INDEX idx_runs_kind_started ON runs (kind, started_at DESC);
+CREATE INDEX idx_runs_started ON runs (started_at DESC);

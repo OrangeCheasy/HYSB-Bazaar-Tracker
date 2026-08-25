@@ -30,6 +30,31 @@ cheaper than debugging it later alongside real bugs.
 
 ---
 
+## Phase 0.5 — Measure before you commit
+**Goal:** replace every storage estimate in CLAUDE.md with a number you measured.
+**Effort:** 1 hour
+
+The sizing in CLAUDE.md §3 is projection. Projections about payload size and parse cost
+are wrong often enough that building a data layer on top of one is a bad trade when
+checking takes an hour.
+
+Write a throwaway script that fetches the Hypixel bazaar endpoint once and reports:
+- `content-length`, raw and gzipped
+- product count, and how many have `buy_summary`/`sell_summary`
+- `JSON.parse` wall time (run it 10 times, take the median)
+- serialized byte size of one `quick_status` row and one full product with order books
+- projected `snapshots`/`hourly`/R2 growth for Tier A and for all products
+
+Then update CLAUDE.md §3 with the real figures and delete this phase.
+
+**Done when:** the numbers in CLAUDE.md are yours, not mine. If parse time comes in near
+or above 10ms, that confirms the Workers Paid requirement rather than assuming it.
+
+**Why bother:** this is also the cheapest possible test that the endpoint behaves the way
+this whole plan assumes — keyless, complete, one request.
+
+---
+
 ## Phase 1 — Port the domain core
 **Goal:** `packages/core` fully implements the Python model, with tests, and zero I/O.
 **Effort:** 2–3 evenings
@@ -62,29 +87,56 @@ reusable-systems discipline that makes a multi-project studio work.
 **Goal:** the cron fills D1 with real bazaar history, forever, without falling over.
 **Effort:** 2–3 evenings
 
+**Deploy this standalone the moment it works** — before the API, before any frontend.
+History you did not collect is unrecoverable, and by the time Phase 5 is done you will
+have three or four weeks of your own five-minute data. That is better than anything
+Coflnet would give you for the same window.
+
 Deliverables:
-- Migrations for `products`, `recipes`, `snapshots`, `hourly`, `daily`
-- `ingest.ts`: one fetch to Hypixel, normalize via `packages/core`, chunked multi-row
-  insert into `snapshots`
-- `rollup.ts`: hourly aggregation, daily aggregation, retention pruning
+- Migrations for `products`, `recipes`, `snapshots`, `hourly`, `daily`, `runs`
+- Tier assignment: a tag is Tier A if referenced by a recipe, else Tier B (CLAUDE.md §2).
+  Config-driven, re-evaluated each run, never a migration
+- `ingest.ts`: one fetch, normalize via `packages/core`, tier split, chunked multi-row
+  insert. Tier A → `snapshots`; Tier B → `hourly` directly
+- Order book depth metrics computed at ingest (depth within 1% and 5% of top of book,
+  largest wall, order count). Raw summaries go to R2, never to D1
+- R2 archive: one object per day, full order books 14 days, `quick_status` only beyond
+- `rollup.ts`: hourly, daily, retention pruning per tier
 - `event.cron` branching in `scheduled`
-- Ingest run recorded in a `runs` table: timestamp, products seen, rows written, duration,
-  error — you cannot debug a cron you cannot see
+- Nightly `wrangler d1 info`-equivalent size check recorded into `runs`
 
 Watch for:
 - Chunk inserts by **bound parameter count** (cap 100/query), not row count
+- Deletes count as rows written — budget pruning alongside inserts
 - Hypixel occasionally returns a product with missing `quick_status`; skip, don't crash
 - One bad product must not abort the whole run
-- Make ingest idempotent — a retry at the same timestamp should upsert, not duplicate
+- Ingest must be idempotent — a retry at the same timestamp upserts, never duplicates
+- `hourly.samples` must be honest. Do not fabricate a full-sample row from partial data
 
-**Done when:** the cron has run unattended for 48 hours, `runs` shows zero errors,
-`snapshots` row counts match expectations, and pruning has actually deleted something.
+**Done when:** the cron has run unattended for 48 hours, `runs` shows zero errors, pruning
+has actually deleted something, R2 has real objects in it, and you have deliberately
+broken the ingest and confirmed `runs` recorded the failure.
+
+**Then leave it running while you build Phase 3 onward.**
 
 ---
 
 ## Phase 3 — Historical backfill
-**Goal:** seed 30–90 days of history so the site is useful on day one instead of in a month.
-**Effort:** 1–2 evenings
+**Goal:** seed enough history for hour-of-day profiling. That is all it is for now.
+**Effort:** 1 evening
+
+**Scope check before you build this.** Hypixel's `buyMovingWeek`/`sellMovingWeek` are
+trailing-seven-day volumes that arrive complete in your very first snapshot. So the entire
+throughput model — crafts/day, hours-to-fill, the volume sanity checks that stop the site
+recommending dead items — works on day one with zero history.
+
+The **only** thing that genuinely needs accumulated history is hour-of-day price
+profiling, which wants 14+ days. If Phase 2 has been running for three weeks by the time
+you get here, you may not need this phase at all.
+
+Do it anyway, for one reason: cross-referencing Coflnet against your own rows is how you
+detect gaps in your collection. At ~150 tags and one request per tag, it is a 95-second
+job. The rate limit is a one-time cost, not an ongoing constraint.
 
 Deliverables:
 - `scripts/backfill.ts` — local Node, hits SkyCofl, writes to D1 via the D1 HTTP API or
@@ -206,10 +258,17 @@ Deliberately **not** doing: user accounts, a mod, a mobile app, real-money anyth
 
 | Item | Cost |
 |---|---|
-| Workers Paid | $5/mo — required, not optional (see CLAUDE.md §3) |
-| D1 | within paid-plan inclusions at this volume |
+| Workers Paid | $5/mo — required, not optional |
+| D1 | free-tier sized at Tier A volume; paid inclusions are not close to binding |
 | KV | within inclusions |
+| R2 | within 10 GB free **only if** the archive policy in CLAUDE.md §3 is followed |
 | Domain | already owned |
+
+Worth being precise about *why* the $5 is needed: it is **CPU, not storage**. At Tier A
+volume the data layer would fit Cloudflare's free tier for years. But Hypixel returns all
+~1500 products in one response with no way to request a subset, so every run parses
+several MB — and free plan caps CPU at 10ms per invocation. Phase 0.5 measures whether
+that is actually true for your payload.
 
 If $5/mo is a blocker: move ingestion to a GitHub Actions cron writing to D1 over HTTP,
 and keep the Worker on free. Real tradeoff — scheduled Actions run late by 5–20 minutes,

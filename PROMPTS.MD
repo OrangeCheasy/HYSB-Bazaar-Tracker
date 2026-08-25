@@ -48,12 +48,45 @@ Before writing anything, show me the file tree you plan to create.
 
 ---
 
+## Phase 0.5 — Measure the payload
+
+```
+Write a throwaway Node script (scripts/spike-measure.ts, delete it after) that
+fetches https://api.hypixel.net/v2/skyblock/bazaar once and reports:
+
+- content-length raw and gzipped
+- product count, and how many include buy_summary / sell_summary
+- median JSON.parse wall time over 10 runs
+- serialized byte size of a single quick_status row, and of one full
+  product including order books
+- projected snapshots / hourly / R2 growth per day, month and year, for
+  Tier A (~150 recipe tags) and for all products
+
+Print it as a table. Then update the sizing figures in CLAUDE.md section 3
+with the measured numbers and tell me which of my estimates were wrong and
+by how much.
+
+If median parse time is anywhere near 10ms, say so explicitly — that's the
+number deciding whether Workers Paid is genuinely required.
+```
+
+**Checkpoint:** CLAUDE.md now contains your numbers, not estimates. Delete the script.
+
+---
+
 ## Phase 1 — Domain core
 
 Run this in two prompts. The first is planning only.
 
+First: copy the Python tool into the repo at `reference/bzcraft/` and commit it.
+Claude Code can only read files inside the working directory, so the port
+prompt below depends on those files being there. Keep them after the port —
+they're your independent check when a number looks wrong six months from now.
+
 ```
-Read /path/to/bzcraft/model.py — the Python implementation we're porting.
+Read reference/bzcraft/model.py — the Python implementation we're porting.
+reference/bzcraft/bzcraft.py shows how it's called end to end, and
+README.md explains the market model behind it.
 
 Plan the port to packages/core as five modules: sides, stats, profile,
 economics, recipes. For each, give me the exported types and function
@@ -118,26 +151,54 @@ Constraints that will break this if ignored:
 - Record every run in a runs table: ts, products seen, rows written,
   duration ms, error text.
 
+Implement the tier split from CLAUDE.md section 2: Tier A (tags referenced
+by a recipe) gets 5-minute snapshots; Tier B gets an hourly row only, no
+snapshots. Tier membership is derived from the recipes table each run — it
+must never require a migration to change.
+
+Order books: compute depth metrics at ingest (depth within 1% and 5% of top
+of book, largest single wall, order count) and store only those in D1. The
+raw buy_summary/sell_summary go to R2 under the archive policy in CLAUDE.md
+section 3 — one object per DAY, not per run.
+
 Then rollup.ts: snapshots→hourly, hourly→daily, and retention pruning per
-the policy in CLAUDE.md section 3. Branch on event.cron in the scheduled
-handler.
+tier. Branch on event.cron in the scheduled handler.
+
+Integrity requirements, per CLAUDE.md section 3b — these matter more than
+the storage math because gaps are unrecoverable:
+- every run writes to runs, success or failure
+- hourly.samples must reflect actual snapshot count; never fabricate a
+  full-sample row from partial data
+- the nightly cron records current database size into runs so growth is
+  measured over time
 
 Write a local test that runs ingest against a saved fixture of the Hypixel
 response so we're not hitting the live API in tests. Save the fixture to
-test/fixtures/.
+test/fixtures/ — reuse the response from the Phase 0.5 spike.
 ```
 
 **Checkpoint:** run `npx wrangler dev --test-scheduled` and hit the scheduled endpoint;
 inspect local D1 with `wrangler d1 execute bazaar --local --command "select * from runs"`.
-Commit, deploy, then **wait 48 hours before Phase 3.** Real cron behaviour is the only
-proof that matters.
+Then deliberately break the ingest and confirm `runs` records the failure.
+
+**Then deploy it and leave it running.** Don't wait until the site is built — every day of
+delay is a day of history you can't get back. Come back to Phase 3 in a week or three
+while it quietly accumulates.
 
 ---
 
 ## Phase 3 — Backfill
 
+First ask whether you still need this — see the scope check in ROADMAP Phase 3. If the
+Phase 2 cron has been running three weeks, hour-of-day profiling may already work.
+
 ```
 Build scripts/backfill.ts per docs/ROADMAP.md Phase 3.
+
+Two jobs, and the second is the one I actually care about: seed hour-of-day
+history for tags that lack it, AND cross-reference Coflnet's rows against
+our own to find gaps in our collection. Report any hour where we have no
+row but Coflnet does.
 
 Local Node script only — this must never be importable from the Worker.
 It reads recipe tags from D1, pulls SkyCofl history for each, and writes

@@ -1,4 +1,4 @@
-# CLAUDE.md — orangecheasy.net
+# CLAUDE.md — bazaar.laimthemo.com
 
 Bazaar craft analytics for Hypixel SkyBlock. Tracks base→enchanted craft margins,
 diurnal price patterns, and volume-adjusted profitability. Public read-only site.
@@ -56,15 +56,34 @@ orangecheasy.net
 ### Data flow — read this before touching ingestion
 
 ```
-Hypixel /v2/skyblock/bazaar   ── cron */5 ──▶  snapshots (D1)
-   ONE request, ALL ~1500 products,                │
-   no API key required                             ├── cron :07 ──▶ hourly rollup
-                                                   ├── cron 04:23 ─▶ daily rollup + prune
-                                                   └── cron :07 ──▶ precompute → KV
-                                                                        │
-SkyCofl /api/bazaar/{tag}/history  ── manual ──▶ backfill seed          ▼
-   local script only, NEVER from the Worker                    /api/* reads KV or D1
+Hypixel /v2/skyblock/bazaar  ── cron */5 ──▶ tier split ──▶ snapshots (D1, Tier A only)
+   ONE request, ALL ~1500 products,                │                    │
+   no API key required                             │                    ├─ :07  hourly rollup
+   response is several MB — you cannot             │                    ├─ 04:23 daily + prune
+   ask for a subset                                │                    └─ :07  precompute → KV
+                                                   │                              │
+                                                   └──▶ R2 raw archive            ▼
+                                                        (see §3 sizing)   /api/* reads KV or D1
+
+SkyCofl /api/bazaar/{tag}/history ── manual, once ──▶ hour-of-day seed only
+   local script, NEVER from the Worker
 ```
+
+### Tiered coverage — the decision that keeps this inside the limits
+
+We do **not** store five-minute rows for all 1500 products. Coverage, not retention, is
+the lever that controls growth.
+
+| Tier | Which tags | Storage | Growth |
+|---|---|---|---|
+| **A** | tags referenced by a recipe (~150) | 5-min `snapshots` pruned at 7d, `hourly` forever | ~105 MB/year |
+| **B** | everything else | `hourly` only, no snapshots, pruned to 90d then `daily` | bounded |
+
+Promoting a tag from B to A must be a config change, never a migration. Tier A alone fits
+inside D1's **free** 500 MB database limit for roughly four years.
+
+The reason we still fetch all 1500 products: Hypixel returns them in one response and
+offers no way to request a subset. Tiering happens after parsing, on our side.
 
 **Rule: user requests never touch an upstream API.** Not once, not "just for the detail
 page." Reasons, in order of severity:
@@ -98,15 +117,64 @@ Verified against Cloudflare docs; re-check before assuming.
   `INSERT` per product. Build one multi-row `INSERT ... VALUES (...),(...)` or use
   `db.batch()`, chunked to stay well under the cap. Bound parameters cap at 100 per
   query, so chunk by parameter count, not row count.
-- **D1 storage** — 10GB max per database on paid. 1500 products × 288 snapshots/day is
-  ~430k rows/day. Retention policy is not optional:
-  - `snapshots` (5-min): prune to **7 days**
-  - `hourly`: keep indefinitely (~36k rows/day, manageable)
-  - `daily`: keep indefinitely, used for anything older than 90 days
+- **D1 storage** — 10 GB max per database on paid, 500 MB on free; 1 TB per account.
+  Retention policy is not optional:
+  - `snapshots` (5-min, Tier A only): prune to **7 days** ≈ 25 MB steady state
+  - `hourly`: keep indefinitely. Tier A ≈ 105 MB/year — this is the table that grows
+    forever, so it is the one to watch
+  - `daily`: keep indefinitely, serves anything older than 90 days
+  - Untiered (all 1500 products at 5-min) would be ~2 GB/year in `hourly` alone. That is
+    the plan we rejected; do not drift back into it by "temporarily" widening coverage.
+- **Deletes count as rows written.** Pruning is not free. Tier A prunes ~300k rows/month
+  against the 50M included on paid — comfortable, but the untiered version would roughly
+  double total write volume. Budget deletes alongside inserts.
+- **R2 raw archive sizing** — the full response including `buy_summary`/`sell_summary` is
+  several MB, roughly **300 MB/day gzipped**, which exhausts R2's 10 GB free allowance in
+  about five weeks and keeps growing. Therefore:
+  - Bundle **one object per day**, not 288 per day (operation counts matter as much as bytes)
+  - Keep full order books for **14 days**
+  - Beyond 14 days, archive `quick_status` only — about 10% of the size, and still enough
+    to recompute every derived table
+- **Order books are never stored raw in D1.** 1500 products × ~60 levels = 90k rows per
+  snapshot; at 5-minute intervals that is 26M rows/day and D1 will not tolerate it.
+  Compute depth metrics at ingest — depth within 1% and 5% of top of book, largest single
+  wall, order count — store those few numbers, send the raw summaries to R2.
+- **D1 primary location is effectively permanent.** Set it deliberately at creation with
+  `--location` (`weur|eeur|apac|oc|wnam|enam`). Omitting it places the primary wherever the
+  person running the command happens to be. Changing it later means export, recreate,
+  reimport. Writes always route to the primary; read replication is free and automatic.
+- **`--local` and `--remote` D1 are entirely separate databases.** Local dev writes a real
+  SQLite file under `.wrangler/state/`. Migrations must be applied to both. Applying only
+  locally and wondering why production has no tables is the single most common mistake here.
 - **KV writes** are limited and eventually consistent (~60s global propagation). KV holds
   *precomputed* payloads written by cron, never per-request writes.
 - **Cron triggers** have no wall-duration limit on paid, but do not assume unlimited CPU.
   Split the work across separate cron expressions and branch on `event.cron`.
+
+---
+
+## 3b. Gaps are the real risk, not storage
+
+Storage has years of headroom. What actually destroys the value of self-collected history
+is discontinuity, and it fails silently: a cron errors for three days, Hypixel has an
+outage, a deploy breaks the `scheduled` handler and nobody notices for a week because the
+site keeps serving stale KV perfectly happily.
+
+**You cannot backfill your own gaps.** Coflnet only helps for the window before you
+started collecting, and only at their resolution.
+
+Three mechanisms, all built in Phase 2 rather than bolted on later:
+
+1. Every cron run writes to `runs` — success or failure, with duration and row counts.
+2. Alert on **consecutive** failures, not single ones. A single failed run is noise; three
+   in a row is an outage.
+3. `hourly.samples` records how many snapshots built each row. An hour assembled from 2
+   samples instead of 12 is visibly less trustworthy, and the API must surface that rather
+   than averaging it away silently.
+
+Corollary: **start ingesting as early as possible.** Every day of delay is a day of
+history you cannot recover. Deploy the cron standalone the moment Phase 2 works — before
+the API exists, before there is any frontend.
 
 ---
 
@@ -168,7 +236,12 @@ npm run deploy           # wrangler deploy (CI does this; avoid running locally)
 npm run db:migrate       # wrangler d1 migrations apply bazaar --remote
 npm run db:migrate:local
 npm run backfill -- --tag COAL --days 30
+npx wrangler d1 info bazaar          # current database size — check monthly
 ```
+
+Bindings: `DB` (D1), `CACHE` (KV), `ARCHIVE` (R2). The nightly cron records database size
+into `runs` so growth is measured rather than estimated — a month of real numbers beats
+any projection in this file.
 
 ## 7. Non-negotiables
 

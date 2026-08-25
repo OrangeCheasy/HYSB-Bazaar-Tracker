@@ -387,3 +387,41 @@ enough to skip on a re-run) rather than needing separate bookkeeping.
 artifact CLAUDE.md originally wanted is deferred to Phase 8 (already gated behind 30
 clean days) as an offline job folding a day's tick objects into one file — built against
 real R2 data at that point, rather than guessed batching logic during Phase 2.
+
+---
+
+## ADR-017 — Phase 3 backfill is deferred until after production ingestion
+
+**Date:** 2026-08-25 · **Status:** accepted
+
+Phase 3 (Coflnet backfill into `hourly`) was skipped to get Phase 2's cron into
+production first. Recording why, because the ordering looks like corner-cutting and
+isn't.
+
+The two data sources have opposite decay properties. Coflnet's history is *their*
+archive: it is as available next month as it is today, so a month of delay costs
+nothing. Our own five-minute history exists only for the wall-clock hours our cron was
+actually running — a delayed deploy is history that no later work can recover
+(CLAUDE.md section 3b). Backfill-before-deploy therefore trades an unrecoverable
+resource for a recoverable one.
+
+Backfill also does not unblock Phase 4. Its Done-when is a KV-read latency figure,
+which is independent of how many rows `hourly` contains. And the throughput model —
+crafts/day, hours-to-fill, the volume sanity checks — runs off `sellMovingWeek`, which
+arrives complete in the very first snapshot.
+
+What genuinely degrades without it is narrow: hour-of-day profiling, and the 7d/30d
+windows in `/api/item/:tag`. Both degrade *honestly* rather than silently —
+`computeHourProfile` reports per-hour `samples` (`packages/core/src/profile.ts`), so a
+profile built from thin data reads as thin instead of being averaged into a confident
+wrong answer. That is what makes the deferral safe rather than merely convenient.
+
+**Cost:** the gap-detection half of Phase 3 — cross-referencing Coflnet's rows against
+ours to find holes in our own collection — is also deferred, and that is the half worth
+having regardless of whether profiling needs seeding. Until it exists, `runs` and
+`hourly.samples` are the only gap detectors.
+
+**Revisit:** before Phase 5 puts hour-of-day charts in front of users. Structurally free
+to defer — `hourly.source` already exists with default `'hypixel'`
+(`migrations/0001_initial.sql`), so coflnet rows drop in later with no migration and
+stay distinguishable from our own.

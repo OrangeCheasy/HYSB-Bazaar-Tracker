@@ -66,7 +66,7 @@ Three reasons this is a hard rule rather than a preference, in order of severity
 
 **Date:** 2026-08-24 · **Status:** accepted
 
-Hypixel's `buyPrice` is what *you pay to instant-buy* — the lowest sell offer. The names
+Hypixel's `buyPrice` is what _you pay to instant-buy_ — the lowest sell offer. The names
 read backwards, and third-party tools get it wrong constantly.
 
 `packages/core/src/sides.ts` never reads the names as truth. It sorts the two sides by
@@ -81,3 +81,271 @@ class of bug this module exists to eliminate.
 `packages/core/test/sides.test.ts` feeds deliberately inverted input and asserts identical
 output. **That test is load-bearing and must not be deleted or weakened.** If it goes red,
 the site would print backwards profit numbers, and CI blocks the deploy.
+
+---
+
+## ADR-005 — Two normalized shapes: `Point` for an instant, `Bar` for an interval
+
+**Date:** 2026-08-24 · **Status:** accepted
+
+`snapshots` holds instantaneous ask/bid. `hourly` and `daily` hold `ask_avg/min/max` per
+side. A single normalized type cannot represent both without discarding the extremes —
+and the extremes are exactly what `askFloor`/`askCeiling` in `Stats` report.
+
+So `packages/core/src/sides.ts` exports both. `Point` is one moment; `Bar` is one interval
+carrying per-side low/avg/high plus a `samples` count. A `Point` widens to a degenerate
+`Bar` where min == avg == max, which is the truthful reading of a single observation.
+Everything downstream of `sides.ts` — `stats`, `profile`, `economics` — consumes `Bar[]`
+only.
+
+The payoff is one code path regardless of origin. Hypixel `quick_status`, Coflnet history,
+and both D1 row shapes each get a small adapter, and none of them leaks past this module.
+Adding a fourth upstream later means writing a fourth adapter, not a fourth branch through
+the statistics.
+
+**Cost:** two types to keep straight, and `avgLow` versus `floor` is a distinction readers
+have to learn. The alternative was three parallel implementations of the same maths.
+
+---
+
+## ADR-006 — Derive sides at ingest; assert, never re-derive, when reading D1
+
+**Date:** 2026-08-24 · **Status:** accepted · **Extends:** ADR-004
+
+The structural derivation from ADR-004 runs in exactly two places: `normalizeQuickStatus`
+and `normalizeCoflnetPoint` — the two upstream adapters. D1 already stores derived sides,
+so `normalizeHourlyRow` and `normalizeSnapshotRow` map column names and then _assert_ the
+invariant via `isBarWellFormed` / `isWellFormed`.
+
+Re-deriving on read was tempting and is wrong. A crossed row in D1 means ingest wrote bad
+data. Silently re-sorting it on the way out repairs the symptom on every page load while
+the corrupt rows accumulate, and the bug is then invisible until someone queries the table
+by hand. Failing the read surfaces it.
+
+`isBarWellFormed` deliberately does **not** require `askMin >= bidMax`. Over an hour the
+ask can dip below where the bid peaked without any single instant having a crossed book;
+requiring it would reject legitimate volatile hours.
+
+---
+
+## ADR-007 — Fill feasibility ships with every margin, as a required field
+
+**Date:** 2026-08-24 · **Status:** accepted
+
+CLAUDE.md section 7.5 says a profit figure never appears without its fill-feasibility
+caveat. That is a UI rule, and UI rules get forgotten. `ScenarioResult.fillFeasibility` is
+therefore non-optional in the type, so a scenario cannot be constructed without one and a
+component destructuring a scenario has the number in scope already.
+
+The model: a resting order's chance of filling is the daily flow that hits its side,
+against the queue already ahead of it plus the size being added —
+`flow / (queueAhead + myUnits)`, clamped to 1. Instant-buy and instant-sell are 1.0 by
+definition. The `orders` scenario multiplies both, because both must fill.
+
+The three scenarios then read as a deliberate trade: profit rises from `instant` to
+`orders` while feasibility falls. Showing either column alone is a lie in one direction or
+the other.
+
+**Cost:** the formula is a plausible model, not a measurement. It has no notion of how
+many other players are running the same craft. Treat it as an ordering signal, not a
+probability.
+
+---
+
+## ADR-008 — Whether an instant-sell is taxed is a config flag, not a constant
+
+**Date:** 2026-08-24 · **Status:** accepted
+
+CLAUDE.md section 8 states the bazaar sell tax "applies to sell offers only, never to
+buying." That reads most naturally as a sell-versus-buy contrast, but it can also be read
+as offer-versus-instant, and the two readings produce different numbers for the `instant`
+and `mixed` scenarios — the two we present as conservative.
+
+Rather than bury a guess in the arithmetic, `MarketConfig.taxOnInstantSell` defaults to
+`true` (the conservative reading: everything you sell is taxed) and can be flipped in one
+place. Both readings are covered by tests with the arithmetic written out.
+
+**Supersede this entry** once the mechanic is confirmed in-game, rather than editing it.
+
+---
+
+## ADR-009 — Flow rates are an estimate derived from trailing-week counters
+
+**Date:** 2026-08-24 · **Status:** accepted
+
+`Stats.ibPerDay` and `isPerDay` are `mean(movingWeek) / 7`. The upstream figures are
+rolling seven-day totals, so averaging them across bars is smoothed by construction: this
+is an estimate of daily flow, not a measurement of it.
+
+It matters because these two numbers are the denominator of every throughput cap and of
+fill feasibility, so an error here scales straight through to profit-per-day — the value
+the whole scan is ranked by.
+
+The alternative is differencing consecutive counters to recover per-interval flow. That is
+more direct but noisier, since each difference is "units traded in this interval minus
+units traded in the same interval seven days ago", and it needs an unbroken series to work
+at all. Revisit once Phase 2 has produced enough continuous history to compare the two.
+
+---
+
+## ADR-010 — Unreachable defensive branches are structured out, not tested around
+
+**Date:** 2026-08-24 · **Status:** accepted
+
+`packages/core` had branch coverage stuck below the ROADMAP's 90% bar, entirely from
+`?? 0` fallbacks that existed to satisfy `noUncheckedIndexedAccess` and could never fire —
+`mean()` of an array already proven non-empty, indexing a fixed-length array at a bounded
+index.
+
+Two ways out: lower the threshold, or remove the impossible branches. We removed them.
+`computeStats` accumulates in a single pass instead of fifteen `map` + `mean` calls;
+`computeHourProfile` buckets into a `Map` whose `get` has two genuinely reachable
+outcomes; window search accumulates a running sum instead of building an array and taking
+its mean.
+
+The result is honest coverage rather than a lowered bar, and two incidental wins: one pass
+over the series instead of fifteen, and no more `Math.min(...bars.map(f))` spreading every
+element onto the call stack — harmless at 2,000 bars, a crash waiting for whoever widens
+the retention window.
+
+The branch threshold now sits at 90 to match the goal. What remains uncovered is a small
+number of non-finite guards, which are cheap insurance against a NaN arriving from a bad
+upstream payload.
+
+---
+
+## ADR-011 — The third scenario is time-aware, not a half-order hybrid
+
+**Date:** 2026-08-24 · **Status:** accepted · **Supersedes the scenario set in ADR-007**
+
+`packages/core` was first written before `bzcraft/model.py` was available, and guessed a
+third scenario of "buy order on the base, instant-sell the product". The Python's actual
+third scenario is **time-aware**: the same orders on both sides, but priced from the cheap
+hour window for the base and the dear hour window for the product.
+
+The guess was not merely different, it was off-premise. The diurnal edge is the reason
+this project exists — CLAUDE.md's opening line is "tracks base to enchanted craft margins,
+**diurnal price patterns**, and volume-adjusted profitability" — and a scenario set with no
+time dimension cannot express it. The scan would have ranked on a number that ignored the
+site's whole thesis.
+
+The set is now `floor` / `orders` / `timed`, matching `craft_economics`:
+
+|          | base price         | product price     | note                                 |
+| -------- | ------------------ | ----------------- | ------------------------------------ |
+| `floor`  | `lastAsk`          | `lastBid`         | instant both ways, always achievable |
+| `orders` | `lastBid + tick`   | `lastAsk - tick`  | current book, both orders must fill  |
+| `timed`  | cheap-window price | dear-window price | the headline; falls back to `orders` |
+
+`profitPerDay` ranks on `timed`, per the Python's `profit_per_day = crafts_per_day *
+timed_profit`.
+
+Window prices are passed in by the caller rather than computed here, so `economics` stays
+independent of `profile` — the same seam the Python uses via its `timed_buy_price` and
+`timed_sell_price` arguments.
+
+**Also adopted from the Python in the same pass:** the `tick`, i.e. the coins-per-unit you
+outbid or undercut by. Without it the model priced your order _at_ the current best, which
+puts you behind everyone already resting there while assuming you fill like the best order
+in the book.
+
+---
+
+## ADR-012 — Hour windows score on partial data, and say so
+
+**Date:** 2026-08-24 · **Status:** accepted
+
+`bestContiguousWindow` originally required every hour in a window to be populated. On
+Coflnet backfill that returns nothing at all: their history coarsens with age, so a 30-day
+pull legitimately leaves half the hour slots empty, and Phase 3 seeds exactly that data.
+
+Following `model.py best_window`, a window now scores if at least half its hours have
+data, averaged over the hours actually present. The obvious risk is that a window scored
+on two hours competes on equal footing with one scored on six, so `HourWindow.hoursPresent`
+travels with the result and the UI marks a thin window rather than presenting it as solid.
+
+The hour baseline changed in the same pass, also to match the Python: it is the mean of the
+**populated hourly means**, not the mean of the raw bars. One vote per hour, so a densely
+sampled hour cannot drag the baseline toward its own price and make every other hour look
+mispriced — again a real effect on unevenly-sampled backfill data.
+
+---
+
+## ADR-013 — Flow rates come from the newest counter, not an average
+
+**Date:** 2026-08-24 · **Status:** accepted · **Supersedes ADR-009**
+
+ADR-009 derived `ibPerDay` / `isPerDay` as `mean(movingWeek) / 7` and flagged
+counter-differencing as the likely better alternative. `model.py` does neither: it takes
+the **last** point's counter, `last.instant_buy_week / 168`.
+
+That is correct and both alternatives were worse. The upstream figure is already a rolling
+seven-day total, so the newest reading is the best available estimate of current weekly
+flow. Averaging it across bars averages a series of overlapping stale windows and lags the
+market; differencing recovers per-interval flow but is noisy and needs an unbroken series.
+
+Book depth moved to the last bar for the same reason — a queue is a thing that exists right
+now, not on average. `Stats` therefore exposes `lastAsk`, `lastBid`, `lastAskDepth`,
+`lastBidDepth`, and the economics reads those rather than the window means. The means are
+kept for charting and for the typical-price fields.
+
+Two smaller alignments in the same pass: `volatility` is now measured on the **ask** rather
+than the mid, because the ask is what you pay to instant-buy and what your sell offer
+competes against; and `spreadPct` is `(askMean - bidMean) / askMean`, the Python's
+denominator. Both stay unitless — percentage formatting belongs at the display layer.
+
+---
+
+## ADR-014 — The timed buy is priced from the sleep window, not the cheapest window
+
+**Date:** 2026-08-24 · **Status:** accepted · **Corrects ADR-011**
+
+ADR-011 landed the time-aware scenario but sourced its buy price from `bestBuyWindow`,
+the cheapest contiguous hours. `bzcraft.py` line 207 does something different:
+
+```python
+overnight_bid = mean_over_hours(base_cells, sleep_hours, "bid_mean") or base_stats.last_bid
+timed_buy_price = overnight_bid + config["tick"]
+```
+
+The price comes from the **sleep window** — the hours a buy order sits unattended,
+defaulting to `23-07` in `config.json`. `best_window(bid_index, minimize=True)` is used
+only by the `hours` display command, never by the craft economics.
+
+That distinction is the difference between two questions. "When is this material
+cheapest?" is interesting. "What will my order actually fill at while I am asleep?" is the
+one the plan depends on, and the cheap hours are not necessarily the hours you are away.
+Pricing against the cheapest window quietly assumes you are awake to place an order at the
+best moment, which is the opposite of the strategy being modelled.
+
+`meanOverHours` and `hourRange` were added to `profile.ts` to express it. `hourRange`
+wraps midnight, because the default overnight window does. `meanOverHours` returns
+`undefined` rather than 0 when no requested hour has data: the Python returns `0.0` and
+relies on `or last_bid` at the call site, but 0 is a legitimate price for a dead item, so a
+"no data" sentinel must not also be a possible answer.
+
+**The tick moved inside `analyzeCraft`** in the same pass. The Python applies it at the
+call site for the timed prices and inside `craft_economics` for the order prices; doing it
+in one place means a caller cannot forget, and `orders` and `timed` are guaranteed to step
+inside the book identically. `CraftInputs` therefore takes the raw window prices —
+`timedBuyWindowBid`, `timedSellWindowAsk` — and applies the tick itself.
+
+---
+
+## ADR-015 — Throughput is not scaled by the player's waking hours
+
+**Date:** 2026-08-24 · **Status:** accepted · **Reverses an invented behaviour**
+
+An earlier version of `computeThroughput` multiplied crafts-per-day by the fraction of the
+day the player was awake, on the reasoning that you cannot craft while asleep.
+
+That was invented, not ported, and it contradicts the premise. `craft_economics` takes no
+sleep parameter at all: throughput is `min(supply, demand)` and nothing else. The whole
+point of the strategy is that the **buy order fills overnight while you sleep** — the
+sleep window is an input to the buy _price_, not a penalty on volume. Crafting a day's
+worth of material takes seconds once it has arrived.
+
+The old behaviour understated profit-per-day by a third on a default 8-hour sleep window,
+on the site's primary ranking key. `MarketConfig.sleepHours` is gone; the sleep window now
+reaches the model as `timedBuyWindowBid` via `meanOverHours`, which is what it was always
+for.

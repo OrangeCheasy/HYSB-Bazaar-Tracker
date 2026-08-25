@@ -32,11 +32,12 @@ cheaper than debugging it later alongside real bugs.
 
 ## Phase 0.5 — Measure before you commit
 **Goal:** replace every storage estimate in CLAUDE.md with a number you measured.
-**Effort:** 1 hour
+**Effort:** 30 minutes
 
-The sizing in CLAUDE.md §3 is projection. Projections about payload size and parse cost
-are wrong often enough that building a data layer on top of one is a bad trade when
-checking takes an hour.
+Workers Paid is active, so the CPU question is settled and this is now purely a sizing
+exercise. Still worth doing: the tier thresholds and retention windows are all derived
+from my estimate of the payload shape, and if that estimate is off by 3x every number
+downstream is wrong.
 
 Write a throwaway script that fetches the Hypixel bazaar endpoint once and reports:
 - `content-length`, raw and gzipped
@@ -47,8 +48,7 @@ Write a throwaway script that fetches the Hypixel bazaar endpoint once and repor
 
 Then update CLAUDE.md §3 with the real figures and delete this phase.
 
-**Done when:** the numbers in CLAUDE.md are yours, not mine. If parse time comes in near
-or above 10ms, that confirms the Workers Paid requirement rather than assuming it.
+**Done when:** the numbers in CLAUDE.md are yours, not mine.
 
 **Why bother:** this is also the cheapest possible test that the endpoint behaves the way
 this whole plan assumes — keyless, complete, one request.
@@ -237,9 +237,11 @@ deliberately broken a deploy and confirmed CI caught it before production did.
 **Effort:** ongoing
 
 Candidates, roughly in value order:
-- **Alerts** — "tell me when ENCHANTED_X margin exceeds N". Needs a queue and a delivery
-  channel (Discord webhook is by far the cheapest). This is the single strongest retention
-  feature and the main argument for eventually adding accounts.
+- **Alerts** — "tell me when ENCHANTED_X margin exceeds N". Cloudflare Queues is included
+  in the paid plan, and a Discord webhook is the cheapest delivery channel, so the
+  infrastructure cost here is zero. This is the single strongest retention feature and the
+  main argument for eventually adding accounts. Consider pulling it forward ahead of some
+  Phase 5 polish.
 - **Recipe verification workflow** — a way to mark ratios confirmed, with a contributor
   credit. Turns your biggest data-quality weakness into community participation.
 - **Shareable craft links** — `?tax=&capture=` in the URL so a Discord post reproduces
@@ -254,21 +256,78 @@ Deliberately **not** doing: user accounts, a mod, a mobile app, real-money anyth
 
 ---
 
+## Phase 8 — Publish the open dataset
+**Goal:** the aggregated bazaar history, free and open, as bulk dumps.
+**Effort:** 2 evenings, but gated behind a month of proven collection
+
+**Hard gate: do not ship this until Phase 2 has run clean for 30 days.** A dataset with
+unmarked gaps is worse than no dataset, because people build on it and your silent cron
+failure becomes their corrupted analysis.
+
+### Policy position — settle this before writing code
+
+Hypixel's API policy (developer.hypixel.net/policies) contains three clauses that touch
+this. Being free and open source clears one of them:
+
+| Clause | Status |
+|---|---|
+| No commercial use; features must be available to all users | **Cleared** — free, open, no tiers |
+| Not for automated data collection at scale | Live risk. Stated example is player-stat polling; market data is arguably distinct |
+| May not proxy the Public API to 3rd party developers | Live risk, mitigated by the design below |
+
+Neither remaining clause is about money, so "it's free" does not resolve them. The
+downside is not legal — it is losing API access, which ends the project.
+
+Mitigations, in order of value:
+1. **Open-source the collector**, not only the data. "Here is the code, run your own" is
+   not proxying under any reading, and the project survives being cut off.
+2. **Publish aggregates, not a mirror.** Hourly OHLC with volume and sample counts is a
+   compilation we built. Re-emitting raw `quick_status` verbatim every 5 minutes is much
+   closer to fronting their endpoint. Same underlying data, very different character.
+3. **Ask Hypixel directly.** One paragraph via the developer portal. A yes is worth more
+   than any amount of inference.
+
+### Deliverables
+
+- Public R2 bucket on `data.orangecheasy.net`. **Dumps, not a query API** — R2 has zero
+  egress fees, so a static dated file costs nothing regardless of who downloads it, while
+  a public query endpoint means unbounded D1 row reads driven by strangers' bad bots.
+- One **Parquet** file per day. DuckDB and pandas load it directly, so a year of history
+  is queryable on someone's laptop without touching our infrastructure at all.
+- `manifest.json` — available dumps, schema version, date coverage
+- **Coverage report shipped alongside every dump**: per-tag hour counts, `samples`
+  distribution, and an explicit list of known gaps. Non-negotiable; see §3b.
+- `Cache-Control: immutable` on dated files; short TTL on the manifest only
+- Schema versioning. Once published, a column's meaning is frozen. Add columns, never
+  repurpose them.
+- LICENSE for the compilation (CC-BY-4.0 is the low-friction choice), plus a clear notice
+  that the underlying data originates from Hypixel and that this project is not affiliated
+  with or endorsed by Hypixel or Mojang.
+
+**Done when:** someone who has never spoken to you can find the manifest, download a
+month, load it in DuckDB, and correctly identify which hours are low-confidence — without
+asking you anything.
+
+**Why this is worth doing:** Coflnet rate-limits and BazaarTracker paywalls the key.
+Nobody publishes bulk dumps. This is the exact problem that made this project annoying to
+start, and fixing it for the next person is cheap once the collection exists.
+
+---
+
 ## Cost expectations
 
 | Item | Cost |
 |---|---|
-| Workers Paid | $5/mo — required, not optional |
-| D1 | free-tier sized at Tier A volume; paid inclusions are not close to binding |
+| Workers Paid | already active |
+| D1 | within paid inclusions with large headroom at Tier A volume |
 | KV | within inclusions |
 | R2 | within 10 GB free **only if** the archive policy in CLAUDE.md §3 is followed |
+| Queues | within inclusions; unlocks Phase 7 alerts |
 | Domain | already owned |
 
-Worth being precise about *why* the $5 is needed: it is **CPU, not storage**. At Tier A
-volume the data layer would fit Cloudflare's free tier for years. But Hypixel returns all
-~1500 products in one response with no way to request a subset, so every run parses
-several MB — and free plan caps CPU at 10ms per invocation. Phase 0.5 measures whether
-that is actually true for your payload.
+Marginal cost of this project is effectively zero. The binding constraint is no longer
+money or platform limits — it is evening-hours and the discipline to not widen scope
+just because the headroom exists.
 
 If $5/mo is a blocker: move ingestion to a GitHub Actions cron writing to D1 over HTTP,
 and keep the Worker on free. Real tradeoff — scheduled Actions run late by 5–20 minutes,

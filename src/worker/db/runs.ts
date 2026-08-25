@@ -5,6 +5,11 @@ export type RunKind = "ingest" | "rollup" | "prune" | "precompute";
 export interface RunResult {
   productsSeen?: number;
   rowsWritten?: number;
+  /** Deletes count as rows written too — CLAUDE.md section 3 — track them separately
+   *  so pruning's cost is visible, not folded silently into rowsWritten. */
+  rowsDeleted?: number;
+  /** Nightly estimate, not an exact `wrangler d1 info` byte count — see rollup.ts. */
+  dbSizeBytes?: number;
   error?: string;
 }
 
@@ -23,8 +28,9 @@ export async function recordRun(
 ): Promise<void> {
   try {
     await env.DB.prepare(
-      `INSERT INTO runs (kind, started_at, duration_ms, products_seen, rows_written, error)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO runs (kind, started_at, duration_ms, products_seen, rows_written,
+                          rows_deleted, db_size_bytes, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         kind,
@@ -32,6 +38,8 @@ export async function recordRun(
         durationMs,
         result.productsSeen ?? null,
         result.rowsWritten ?? null,
+        result.rowsDeleted ?? null,
+        result.dbSizeBytes ?? null,
         result.error ?? null,
       )
       .run();

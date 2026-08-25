@@ -1,7 +1,15 @@
 export { err, ok, type Result } from "./result.js";
 
 export {
+  assignDepthToSides,
+  computeDepthMetrics,
+  type DepthMetrics,
+  type RawOrderLevel,
+} from "./depth.js";
+
+export {
   aggregate,
+  aggregateBars,
   deriveBarSides,
   deriveSides,
   isBarWellFormed,

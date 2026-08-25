@@ -7,6 +7,7 @@ import { runPrecompute } from "./precompute.js";
 export interface Env {
   DB: D1Database;
   CACHE: KVNamespace;
+  ARCHIVE: R2Bucket;
   ASSETS: Fetcher;
   ENVIRONMENT: string;
   HYPIXEL_BAZAAR_URL: string;

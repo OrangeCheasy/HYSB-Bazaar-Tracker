@@ -349,3 +349,41 @@ The old behaviour understated profit-per-day by a third on a default 8-hour slee
 on the site's primary ranking key. `MarketConfig.sleepHours` is gone; the sleep window now
 reaches the model as `timedBuyWindowBid` via `meanOverHours`, which is what it was always
 for.
+
+---
+
+## ADR-016 — R2 archive: one object per tick, not one bundled object per day
+
+**Date:** 2026-08-25 · **Status:** accepted · **Corrects CLAUDE.md section 3**
+
+CLAUDE.md section 3 said to bundle each day's 288 ingest ticks into one R2 object, to
+keep operation counts down. Implementing Phase 2's ingest against that plan surfaced two
+platform limits that make it actually unsafe, not just suboptimal:
+
+1. R2 multipart uploads require a 5MB minimum part size. One tick's raw payload is
+   ~481KB gzipped — 10x too small to be its own part, so appending a part every 5
+   minutes doesn't work without buffering several ticks first.
+2. Workers isolates cap at 128MB memory, hard, non-negotiable. Holding a growing
+   ~136MB/day blob in memory to decompress, append to, and re-upload every 5 minutes is
+   unsafe well before the 14-day full-order-book window ends, even though the same
+   design would be comfortable at the ~26MB/day steady state after.
+
+The concern that motivated daily bundling — "operation counts matter as much as bytes" —
+turns out not to bind at this volume. 288 writes/day is ~8,640/month against R2's
+1,000,000/month free Class A operation allowance: 0.9% of it. So the fix is simpler than
+working around the multipart floor: write one small object per tick to a dated prefix,
+`archive/{YYYY-MM-DD}/{HHmm}.json.gz`. No step ever needs more than one tick (~481KB) in
+memory, and per-tick objects are directly addressable by timestamp for a future consumer,
+with no multi-gzip-member blob to parse apart.
+
+The 14-day full-detail window is now enforced by a daily downgrade pass
+(`pruneArchiveDetail` in `src/worker/archive.ts`) rather than a write-time decision: once
+a day's ticks turn 15 days old, it rewrites them from full order books to `quick_status`
+only. It processes exactly the one date that crosses the boundary on a given run, not a
+backlog scan, and is idempotent by object size (an already-downgraded tick is small
+enough to skip on a re-run) rather than needing separate bookkeeping.
+
+**Cost:** more R2 objects to eventually consolidate. The literal "one object per day"
+artifact CLAUDE.md originally wanted is deferred to Phase 8 (already gated behind 30
+clean days) as an offline job folding a day's tick objects into one file — built against
+real R2 data at that point, rather than guessed batching logic during Phase 2.

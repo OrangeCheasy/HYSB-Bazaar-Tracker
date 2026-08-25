@@ -79,12 +79,62 @@ What has been ruled out already:
 - Not a gradual-deployment version split. One version at 100%.
 - Not double-recording in our own code. `runIngest` calls `recordRun` once per run, and
   the two runs have different `started_at` and different durations.
+- Not the other Worker on the account. `liamthemo` is the personal site — bindings are
+  `ASSETS`, `IMAGES`, `DISCORD_WEBHOOK_URL`, with no D1 binding and no schedules, so it
+  cannot write to `runs` at all.
+- Not the two Cloudflare API tokens. Tokens are credentials; they authenticate a deploy
+  or an API call and cannot register a schedule or invoke a Worker. Deleting one will not
+  stop this.
 
-**Next diagnostic:** Workers observability logs for the `scheduled` invocations. If both
-deliveries carry the same `scheduledTime`, it is platform-level double delivery and
-belongs in a Cloudflare support ticket; if they differ, something is registering a
-schedule outside `wrangler.jsonc`. Until it is understood, treat every ingest-volume and
-`samples` number from after 2026-08-25 18:10 as suspect.
+Two related findings from the same dig:
+
+- **The deployed config has drifted from `wrangler.jsonc`.** The live script carries two
+  R2 bindings — `ARCHIVE` (ours) and `bazaar_archive` (not in the repo) — so something
+  has been edited in the dashboard rather than in the file. The cron list itself is still
+  clean (three schedules, no duplicates), but a config that drifts once can drift again;
+  a `wrangler deploy` from a clean checkout is what re-establishes the repo as the source
+  of truth. Delete the stray binding once nothing references it.
+- **Our own idempotency has a hole that turns this from harmless into harmful.** ROADMAP
+  Phase 2 requires "a retry at the same timestamp upserts, never duplicates", but
+  `src/worker/ingest.ts:69` stamps rows with `ts = Math.floor(Date.now()/1000)` — raw
+  wall clock. Two deliveries 54s apart therefore land on two different `ts` values and
+  never collide, so the upsert never gets the chance to dedupe them. Quantizing to the
+  tick boundary (`Math.floor(startedAt / 300) * 300`) would make a duplicate delivery a
+  no-op upsert and make the series evenly spaced, which every downstream stat assumes.
+  The R2 archive already survives this by accident: its key is `HHmm`, so the second
+  write just overwrites the first. Note the fix is not complete on its own —
+  `buildHourlyIncrementalUpsert` increments `samples` per ingest call, so it needs to
+  increment only when the snapshot row was actually new.
+
+**Confirmed via Workers observability logs (2026-08-25 21:40):** Cloudflare is delivering
+two genuinely separate scheduled events per tick. They carry different `requestId`s and
+different `scheduledTime`s ~55s apart, on the same cron string and the same script
+version:
+
+```
+log 21:15:06  */5 * * * *  scheduledTime 21:15:04  ver fbb5f89f  req 393805d979  1874ms
+log 21:16:03  */5 * * * *  scheduledTime 21:15:59  ver fbb5f89f  req 62d166b655  4249ms
+log 21:07:05  7 * * * *    scheduledTime 21:07:04  ver fbb5f89f  req 3c25c8ed3d   894ms
+log 21:08:01  7 * * * *    scheduledTime 21:07:59  ver fbb5f89f  req 03d59cec50  2474ms
+```
+
+So it is a trigger-registration problem on Cloudflare's side, not our code: both cron
+expressions are affected, every tick, since the 18:10 deploy. Note also that neither
+`scheduledTime` sits on the minute boundary a `*/5` schedule should fire at (:04 and
+:59), which fits a duplicated/stuck schedule entry rather than a retry.
+
+**Remedy, in order:**
+
+1. Re-register the triggers. A plain `wrangler deploy` rewrites the schedule list, and
+   the Phase 4 deploy above is the natural opportunity — check whether the doubling stops
+   immediately afterwards.
+2. If it survives that, clear the triggers explicitly (PUT an empty crons list), confirm
+   from `runs` that ingestion stops, then PUT the three schedules back.
+3. If it survives *that*, it is a platform bug: open a support ticket citing the request
+   ID pairs above — two scheduled events, one cron, 55s apart, same version.
+
+Fix the `ts` quantization below regardless of which step clears it. A cron that delivers
+twice should be a no-op, not a data corruption.
 
 ## Then — close out Phase 2
 

@@ -7,10 +7,14 @@ export default defineConfig({
     include: ["packages/core/test/**/*.test.ts"],
     coverage: {
       include: ["packages/core/src/**/*.ts"],
+      // ROADMAP Phase 1 asks for >90% on packages/core. Branches sat at 85 because the
+      // domain code carried impossible-but-uncoverable fallbacks; those were structured
+      // out rather than tested around, so the bar now matches the stated goal on every
+      // metric. What remains uncovered is a handful of defensive non-finite guards.
       thresholds: {
         lines: 90,
         functions: 90,
-        branches: 85,
+        branches: 90,
         statements: 90,
       },
     },

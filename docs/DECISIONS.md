@@ -682,3 +682,56 @@ query needs.
 erode rules. Mitigated by stating the bar explicitly — "provably dead *and* actively breaks
 new databases" — and by adding the replay check to section 5, so the property this rule
 exists to protect is something you can actually test instead of merely intend.
+
+---
+
+## ADR-025 — An implausibly high merge margin means the merge does not exist
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+Anvil edges whose *implied merge ratio* — `price(N+1) / (2 × price(N))` — exceeds **3** are
+withheld from the conversion graph (`detectMergeGates`). The family then targets the
+highest rung a merge can actually reach, rather than the highest rung the bazaar lists.
+
+**Why.** The first anvil scan ranked `ENCHANTMENT_LOOTING_4 → _5` first at **2.88 billion
+profit/day**, a 1,509% margin. The data was correct: Looting IV asks 50,000 and Looting V
+asks 172,816,195. The *model* was wrong. Looting V is not obtainable from an anvil at all —
+it comes from a minigame — so the conversion the scan was pricing does not exist. Seeding
+edges from adjacent bazaar levels assumes every rung is mergeable, and that assumption is
+false for a whole class of high-tier books.
+
+The generalisation, and the reason this is a rule rather than a special case: **an
+enormous margin on a merge is evidence the merge is impossible, not evidence of a
+bargain.** Nobody leaves a 1,500x conversion open.
+
+**Why a price heuristic rather than a list.** A hardcoded set of un-mergeable enchants
+would stale the moment Hypixel adds one, which is the same failure mode CLAUDE.md section 2
+forbids for tier assignment and migration 0008 forbids for edge seeding. The price signal
+is derived, self-updating, and needs no enchant knowledge.
+
+**Why 3.** Measured, not guessed. Across the 320 edges with prices on both rungs the
+implied ratio is sharply bimodal — 127 of the first 144 sampled sat under 1.5, and the tail
+past 3 is dominated by top rungs (`TURBO_WARTS_4` at 1,334,189x, `FEATHER_FALLING_7` at
+3,879x, several Ultimates). 3 is also exactly CLAUDE.md section 8's existing rule of thumb
+— a 200% margin means the recipe is wrong, the item is dead, or someone is walling it — so
+this applies an established heuristic to a chain rather than inventing a new one. 45 of 320
+edges are currently gated. The threshold is a parameter, because the 3-10 band is genuinely
+ambiguous.
+
+**Unjudgeable edges stay usable.** If either rung is unpriced the edge is kept, not gated.
+Absence of evidence is not evidence of a gate, and `cheapestPath` already refuses to route
+through a rung it cannot price — gating on missing data would delete real chains every time
+a thin rung skipped an hour.
+
+**Cost.** A genuinely spectacular merge sitting above 3x would be suppressed, and we would
+not know. Mitigated by returning the gated set with its ratios rather than discarding it,
+so "why is this family capped at level 4" is answerable. Anvil rows fell from 101 to 46
+when this shipped: 45 gated edges truncate many chains, and a family whose remaining chain
+cannot beat simply buying the top rung is correctly no longer an opportunity.
+
+**Bug found alongside.** The price feed keyed off one global `MAX(hour_ts)`, which is a
+partial hour — a thin book that had not traded in it was simply unpriced. That covered 482
+of 777 book tags, and the 295 it dropped were disproportionately the thin, high-value top
+rungs this scan exists to evaluate (`ENCHANTMENT_LOOTING_5` among them, which is why the
+first gate pass missed the very case that motivated it). Now a per-tag latest price over a
+48h lookback, covering all 777.

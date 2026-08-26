@@ -1,21 +1,27 @@
 import {
   bestSellWindow,
+  bookTagFor,
+  cheapestPath,
   computeHourProfile,
+  detectMergeGates,
   computeStats,
   hourRange,
   meanOverHours,
   normalizeHourlyRow,
   normalizeMany,
+  parseBookTag,
   sliceWindow,
   analyzeCraft,
   type Bar,
+  type ConversionEdge,
+  type ConversionPlan,
   type CraftAnalysis,
   type HourProfile,
   type MarketConfig,
   type Recipe,
 } from "@core/index.js";
 import { selectHourlyBarsForTag } from "./db/history.js";
-import { selectAllRecipes, type RecipeRow } from "./db/recipes.js";
+import { selectRecipesByKind, type RecipeKind, type RecipeRow } from "./db/recipes.js";
 
 /**
  * Orchestration shared by `/api/scan`, `/api/craft/:baseTag`, and `precompute.ts`: pull
@@ -177,6 +183,13 @@ export interface ScanRow {
   readonly recipe: Recipe;
   readonly analysis?: CraftAnalysis;
   readonly error?: string;
+  /** Which craft type produced this row. Compaction and anvil rank in ONE list ordered by
+   *  profit/day (CLAUDE.md section 8) — they compete for the same capital, so splitting
+   *  them into separate leaderboards would hide the comparison that matters. */
+  readonly kind: RecipeKind;
+  /** Anvil only: the chosen route. Carries the entry rung and what it cost, which Phase 5
+   *  surfaces so the entry choice is visible rather than implicit. */
+  readonly plan?: ConversionPlan;
 }
 
 export interface ScanResult {
@@ -196,7 +209,13 @@ export async function runScan(
   now: number,
   capitalAvailable?: number,
 ): Promise<ScanResult> {
-  const recipeRows = await selectAllRecipes(db);
+  // Compaction only. Anvil edges live in the same table but are graph data, not scan
+  // rows: one row per 2:1 merge would be ~620 rows of noise, and at two series fetches
+  // per recipe it would put this loop at ~1,328 D1 queries against a hard cap of 1,000
+  // (CLAUDE.md section 3). Merges are scanned per FAMILY instead — buy at the cheapest
+  // rung, merge up, sell — which is the opportunity anyone actually acts on and the
+  // reason the Part A solver searches entry levels at all.
+  const recipeRows = await selectRecipesByKind(db, "compact");
   const recipes = recipeRows.map(toRecipe);
 
   const built = await Promise.all(
@@ -217,13 +236,25 @@ export async function runScan(
     if (r.dataTo < dataTo) dataTo = r.dataTo;
   }
 
+  const anvil = await runAnvilScan(db, params, now, capitalAvailable);
+  if (anvil.dataTo < dataTo) dataTo = anvil.dataTo;
+
+  const compactRows: ScanRow[] = [...successful, ...failed].map(
+    ({ recipe, analysis, error }) => ({ recipe, analysis, error, kind: "compact" as const }),
+  );
+
+  // One ranked list, not two. Compaction and anvil compete for the same capital, so they
+  // sort together by profit/day — which is volume-adjusted throughput times margin, never
+  // margin alone (CLAUDE.md section 8). Rows with no analysis sort last rather than being
+  // dropped: "no data yet" is information.
+  const all = [...compactRows, ...anvil.rows];
+  const scored = all.filter((r) => r.analysis !== undefined);
+  const unscored = all.filter((r) => r.analysis === undefined);
+  scored.sort((a, b) => (b.analysis?.profitPerDay ?? 0) - (a.analysis?.profitPerDay ?? 0));
+
   return {
-    rows: [...successful, ...failed].map(({ recipe, analysis, error }) => ({
-      recipe,
-      analysis,
-      error,
-    })),
-    dataTo: successful.length > 0 ? dataTo : now,
+    rows: [...scored, ...unscored],
+    dataTo: scored.length > 0 ? dataTo : now,
   };
 }
 
@@ -314,4 +345,150 @@ export function isDefaultScanParams(
     params.sleepEnd === DEFAULT_SLEEP_END &&
     params.sellWindowHours === DEFAULT_SELL_WINDOW_HOURS
   );
+}
+
+/**
+ * Latest ask per book tag, in ONE query.
+ *
+ * This is the whole reason anvil scanning fits inside D1's 1,000-query-per-invocation cap.
+ * The solver needs a price for every rung to choose an entry level — 777 of them — and
+ * fetching those one at a time the way buildCraftAnalysis fetches a series would blow the
+ * budget on its own. Reading `hourly` rather than `snapshots` is deliberate: intermediate
+ * rungs are Tier B and have no five-minute rows, so `snapshots` would silently return
+ * nothing for exactly the levels the entry search exists to consider.
+ */
+async function fetchBookAskPrices(
+  db: Pick<D1Database, "prepare">,
+): Promise<Map<string, number>> {
+  const { results } = await db
+    .prepare(
+      // Latest price PER TAG, not the latest hour globally. The current hour is partial,
+      // and a thin book may simply not have traded in it: `ENCHANTMENT_LOOTING_5` had no
+      // 04:00 row while `ENCHANTMENT_LOOTING_4` did. Keying off one global MAX(hour_ts)
+      // priced 482 of 777 book tags; per-tag prices all 777 — and the 295 it dropped were
+      // disproportionately the thin, high-value top rungs this scan exists to evaluate.
+      //
+      // SQLite's bare-column-with-MAX() rule makes this one grouped pass: `ask_avg` is
+      // taken from the same row that produced MAX(hour_ts). Bounded to a 48h lookback so
+      // the scan never prices a chain off a week-old quote.
+      //
+      // substr() rather than LIKE 'ENCHANTMENT_%': in LIKE, `_` is a single-character
+      // wildcard, so that pattern would also match a hypothetical ENCHANTMENTS_ tag.
+      `SELECT tag, ask_avg, MAX(hour_ts) AS hour_ts FROM hourly
+        WHERE substr(tag, 1, 12) = 'ENCHANTMENT_'
+          AND hour_ts >= (SELECT MAX(hour_ts) - 172800 FROM hourly)
+        GROUP BY tag`,
+    )
+    .all<{ tag: string; ask_avg: number }>();
+
+  const prices = new Map<string, number>();
+  for (const r of results) {
+    if (Number.isFinite(r.ask_avg) && r.ask_avg > 0) prices.set(r.tag, r.ask_avg);
+  }
+  return prices;
+}
+
+/**
+ * One row per enchant family: buy at the cheapest rung, merge up to the top rung, sell.
+ *
+ * Deliberately NOT one row per edge. A single 2:1 merge is not something anyone acts on,
+ * and 620 of them would be ~1,328 D1 queries against a cap of 1,000 plus a ~1MB KV payload
+ * of noise. The opportunity is the whole chain, and choosing where to enter it is what the
+ * Part A solver is for.
+ *
+ * The chain is then priced by the SAME `analyzeCraft` that prices compaction. Once the
+ * solver has picked an entry, "64 books of level 1 make one level 7" is structurally
+ * identical to "160 sugar make one enchanted sugar" — so throughput, fill feasibility,
+ * flags and profit/day all come from one implementation rather than a parallel one.
+ */
+export async function runAnvilScan(
+  db: Pick<D1Database, "prepare">,
+  params: ScanParams,
+  now: number,
+  capitalAvailable?: number,
+): Promise<{ readonly rows: readonly ScanRow[]; readonly dataTo: number }> {
+  const anvilRecipes = await selectRecipesByKind(db, "anvil");
+  if (anvilRecipes.length === 0) return { rows: [], dataTo: now };
+
+  const edges: ConversionEdge[] = anvilRecipes.map((r) => ({
+    from: r.base_tag,
+    to: r.ench_tag,
+    inputPerOutput: r.ratio,
+    // Zero until the anvil fee is confirmed in-game (CLAUDE.md section 8). Not a constant
+    // to invent here — a wrong fee is a wrong margin on every book in the catalogue.
+    stepCost: 0,
+    kind: "anvil",
+    verified: r.verified !== 0,
+    recipeId: r.id,
+  }));
+
+  const prices = await fetchBookAskPrices(db);
+  const priceOf = (tag: string): number | null => prices.get(tag) ?? null;
+
+  // Withhold rungs the market says cannot be merged into. A top rung worth 1,500x its
+  // inputs is not a spectacular trade — it is a book the game only hands out somewhere
+  // else, so the conversion does not exist and the margin is unexecutable. Dropping the
+  // gated edge re-targets the family at the highest rung a merge CAN actually reach,
+  // rather than parking a fantasy at the top of the ranking. See detectMergeGates.
+  const { usable: mergeableEdges, gated } = detectMergeGates(edges, priceOf);
+  if (gated.length > 0) {
+    let worst = gated[0];
+    for (const g of gated) if (worst && g.impliedRatio > worst.impliedRatio) worst = g;
+    console.log(
+      `anvil scan: ${gated.length} edge(s) withheld as un-mergeable; ` +
+        `worst ${worst?.edge.to} at ${worst?.impliedRatio.toFixed(0)}x implied`,
+    );
+  }
+
+  /** Target the top rung of each family — the one a merge strategy actually sells. */
+  const topLevel = new Map<string, number>();
+  for (const e of mergeableEdges) {
+    const parsed = parseBookTag(e.to);
+    if (!parsed) continue;
+    const current = topLevel.get(parsed.family);
+    if (current === undefined || parsed.level > current) {
+      topLevel.set(parsed.family, parsed.level);
+    }
+  }
+
+  let dataTo = now;
+  const rows: ScanRow[] = [];
+
+  for (const [family, level] of topLevel) {
+    const targetTag = bookTagFor(family, level);
+    const solved = cheapestPath(targetTag, mergeableEdges, priceOf);
+    if (!solved.ok) {
+      rows.push({
+        recipe: anvilRecipeShell(targetTag, targetTag, 1),
+        error: solved.error,
+        kind: "anvil",
+      });
+      continue;
+    }
+
+    const plan = solved.value;
+    // No steps means buying the finished book beats every merge route. That is a real
+    // answer, not a failure — but it is not a craft, so it is not a craft row.
+    if (plan.steps.length === 0) continue;
+
+    const recipe = anvilRecipeShell(plan.entryTag, targetTag, plan.entryUnits);
+    const built = await buildCraftAnalysis(db, recipe, params, now, capitalAvailable);
+    if (built.dataTo < dataTo) dataTo = built.dataTo;
+    rows.push({ recipe, analysis: built.analysis, error: built.error, kind: "anvil", plan });
+  }
+
+  return { rows, dataTo };
+}
+
+/**
+ * A synthetic Recipe standing for a whole merge chain: `ratio` is the solver's entryUnits,
+ * so Sharpness 1 -> 7 arrives as ratio 64 rather than six separate ratio-2 rows.
+ *
+ * `verified: false` always. Anvil ratios are derived from tag names, and CLAUDE.md
+ * section 8 is explicit that name matching cannot confirm a ratio — the fact that 2^k is
+ * arithmetic rather than a guess does not make the CHAIN verified, because whether every
+ * rung really merges is the unverified part.
+ */
+function anvilRecipeShell(baseTag: string, enchTag: string, ratio: number): Recipe {
+  return { id: null, baseTag, enchTag, ratio, verified: false, note: null };
 }

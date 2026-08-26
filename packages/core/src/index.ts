@@ -76,6 +76,25 @@ export {
 } from "./economics.js";
 
 export {
+  ANVIL_INPUT_PER_OUTPUT,
+  DEFAULT_MAX_IMPLIED_MERGE_RATIO,
+  MIN_MERGE_LEVEL,
+  anvilEdges,
+  bookTagFor,
+  booksRequired,
+  deriveFamilies,
+  detectMergeGates,
+  levelEndpointTags,
+  mergeableFamilies,
+  parseBookTag,
+  type AnvilOptions,
+  type BookTag,
+  type EnchantFamily,
+  type GatedEdge,
+  type MergeGateResult,
+} from "./anvil.js";
+
+export {
   cheapestPath,
   type AcquisitionPrice,
   type ConversionEdge,

@@ -1,6 +1,8 @@
 import {
   aggregate,
   aggregateBars,
+  anvilEdges,
+  deriveFamilies,
   err,
   normalizeHourlyRow,
   normalizeMany,
@@ -17,6 +19,11 @@ import { pruneArchiveDetail, pruneArchiveExpired } from "./archive.js";
 import { buildDailyUpsert, type DailyRow } from "./db/daily.js";
 import { buildHourlyReplaceUpsert, type HourlyReplaceRow } from "./db/hourly.js";
 import { boundedDelete } from "./db/prune.js";
+import {
+  buildAnvilRecipePrune,
+  buildAnvilRecipeUpsert,
+  type AnvilRecipeRow,
+} from "./db/recipes.js";
 import { recordRun } from "./db/runs.js";
 import type { Env } from "./index.js";
 
@@ -239,6 +246,11 @@ export async function runDailyRollup(env: Env): Promise<void> {
       );
     }
 
+    const anvilSynced = await syncAnvilRecipes(env);
+    if (anvilSynced > 0) {
+      console.log(`daily: synced ${anvilSynced} anvil edge(s) from the product list`);
+    }
+
     const archiveExpiry = await pruneArchiveExpired(env, startedAt);
     if (archiveExpiry.deleted > 0) {
       console.log(
@@ -269,4 +281,35 @@ export async function runDailyRollup(env: Env): Promise<void> {
       error: e instanceof Error ? e.message : String(e),
     });
   }
+}
+
+/**
+ * Re-derive anvil edges from the live product list and write them into `recipes`.
+ *
+ * Runs daily rather than every ingest tick. The enchant catalogue changes rarely, and
+ * ~620 upserts every five minutes would be ~5.4M writes/month — 11% of the monthly D1
+ * allowance spent rewriting rows that almost never change. Once a day is ~620 writes.
+ *
+ * Derived, not seeded: migration 0008 explains why this cannot live in a migration
+ * (a hardcoded list staleness-locks the catalogue, and an INSERT ... SELECT FROM products
+ * would put zero rows on a fresh database). CLAUDE.md section 2's "re-evaluated each run,
+ * never a migration" is the same rule tier assignment follows.
+ */
+export async function syncAnvilRecipes(env: Env): Promise<number> {
+  const { results } = await env.DB.prepare("SELECT tag FROM products").all<{ tag: string }>();
+  if (results.length === 0) return 0;
+
+  const families = deriveFamilies(results.map((r) => r.tag));
+  const edges = anvilEdges(families);
+  const rows: AnvilRecipeRow[] = edges.map((e) => ({
+    baseTag: e.from,
+    enchTag: e.to,
+    ratio: e.inputPerOutput,
+  }));
+
+  const statements = buildAnvilRecipeUpsert(env.DB, rows);
+  if (statements.length > 0) await env.DB.batch(statements);
+  await buildAnvilRecipePrune(env.DB).run();
+
+  return rows.length;
 }

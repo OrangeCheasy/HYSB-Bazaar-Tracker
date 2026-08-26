@@ -258,6 +258,21 @@ output. This single module serves three purposes:
 Build it generic over edges. Do not special-case anvils.
 
 ### Part B — anvil merges
+**Status: DONE 2026-08-26**, deployed `a078afbe`. 293 tests green. Measured in production:
+**620 anvil edges** from 155 families, all `verified = 0`; Tier A is **793 tags of which
+295 are book level-endpoints**; `/api/scan` returns **144 rows — 43 compaction and 101
+anvil, ranked in one list by profit/day**. KV payload 263 KB, warm reads ~100ms TTFB.
+
+**Resolved during the same session (ADR-025), deployed `a43323ca`.** The first anvil scan
+ranked `ENCHANTMENT_LOOTING_4 → _5` first at 2.88 billion profit/day — a 1,509% margin on a
+merge that does not exist, because Looting V comes from a minigame rather than an anvil.
+Edges whose implied merge ratio exceeds 3 are now withheld and the family re-targets the
+highest rung a merge can actually reach. 45 of 320 judgeable edges are gated; the top of
+the ranking now sits at −1% to 0% floor margins, the band section 8 predicts.
+
+Fixed alongside: the book price feed keyed off one global `MAX(hour_ts)` — a partial hour —
+and so priced only 482 of 777 book tags, dropping exactly the thin high-value top rungs the
+scan exists to evaluate. Now a per-tag latest price over a 48h lookback.
 
 - `packages/core/src/anvil.ts` — parse `ENCHANTMENT_{ENCHANT}_{LEVEL}` into (family,
   level); derive each family's level range from the product list, never a hardcoded map

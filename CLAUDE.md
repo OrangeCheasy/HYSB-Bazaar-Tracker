@@ -87,7 +87,8 @@ this system grows without bound.
 
 Tier A membership is **recomputed each run**, not a static list. A tag that starts trading
 gets promoted automatically; a dead one falls out. Promotion must never require a
-migration. Current size: ~784 tags (501 pre-books + 283 book level-endpoints).
+migration. **Measured 2026-08-26 after the book clause shipped: 793 Tier A tags, of which
+295 are book level-endpoints** — 620 anvil edges derived from 155 families.
 
 **Why book level-endpoints get in regardless of volume.** Anvil merging (§8) consumes
 level-1 books and produces max-level books; those two rungs are the only ones a merge
@@ -160,9 +161,9 @@ Verified against Cloudflare docs; re-check before assuming.
 - **D1 storage** — 10 GB max per database on paid, 500 MB on free; 1 TB per account.
   Figures are measured from a live payload, not estimated (see the Phase 0.5 checkpoint in
   `docs/ROADMAP.md`), and are **steady state, not annual growth**:
-  - `snapshots` (5-min, Tier A, ~784 tags): prune to **7 days** ≈ **243 MB** steady state
-    (measured ~154 bytes/row, 226k rows/day). Larger than the old 44 MB figure because
-    Tier A grew from 150 recipe tags to 784 with book level-endpoints included.
+  - `snapshots` (5-min, Tier A, 793 tags measured): prune to **7 days** ≈ **246 MB** steady state
+    (measured ~154 bytes/row, 228k rows/day). Larger than the old 44 MB figure because
+    Tier A grew from 150 recipe tags to 793 once book level-endpoints were included.
   - `hourly` (all 2,136 products): prune to **30 days** ≈ **283 MB** steady state
     (measured ~184 bytes/row, 51.3k rows/day). Previously "keep indefinitely" at
     231 MB/year — the cap converts an unbounded liability into a fixed cost.
@@ -391,10 +392,22 @@ What makes this genuinely different from 160:1 compaction, and why it is not jus
   only 4.6% of unit volume — you are selling few, expensive items. `hoursToFillOneCraft`
   is the headline constraint, not a footnote, and capital-per-craft runs to tens of
   millions against a few thousand for enchanted materials.
-- **Not every level is reachable by merging.** Some enchants cap below their bazaar-listed
-  maximum, or have levels obtainable only from specific drops. Ratios still cannot be
-  validated automatically (the rule at the top of this section applies with more force,
-  not less) — every anvil recipe carries `verified` and starts at `false`.
+- **Not every level is reachable by merging, and the price says which.** Many top rungs are
+  obtainable only from elsewhere in the game — a minigame reward, a specific drop —
+  *not* from an anvil. `ENCHANTMENT_LOOTING_5` is the reference case: Looting IV asks
+  50,000 and Looting V asks 172,816,195. Two Looting IV books do not make a Looting V, so
+  the "1,509% margin" that produced is a trade nobody can execute.
+
+  **An insanely high margin on a merge is evidence the merge does not exist**, not evidence
+  of a bargain. The detector is the *implied merge ratio*,
+  `price(N+1) / (2 × price(N))`: sharply bimodal across the 320 priced edges, with real
+  merges under 1.5 and gated rungs in the tail past 3. `detectMergeGates` withholds edges
+  above 3 — the same 200%-margin suspicion line, applied to a chain — so the family
+  re-targets the highest rung a merge can reach. 45 of 320 are gated. An edge whose ratio
+  cannot be computed stays usable: absence of evidence is not evidence of a gate. ADR-025.
+- Ratios still cannot be validated automatically (the rule at the top of this section
+  applies with more force, not less) — every anvil recipe carries `verified` and starts at
+  `false`. The gate heuristic narrows the damage; it does not replace verification.
 - Anvil coin/XP cost is **unverified**; treat it as an input to confirm, not a constant to
   hardcode. If it turns out non-zero it enters the cost side per merge, meaning `2^(M-L)-1`
   merges, not one.

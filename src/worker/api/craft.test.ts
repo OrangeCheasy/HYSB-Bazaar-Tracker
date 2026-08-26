@@ -34,6 +34,7 @@ describe("handleCraft — stale data", () => {
       ratio: 160,
       verified: 1,
       note: null,
+      kind: "compact",
     };
 
     const db = makeQueuedFakeD1({

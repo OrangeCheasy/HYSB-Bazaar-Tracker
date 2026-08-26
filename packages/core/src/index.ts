@@ -161,6 +161,8 @@ export type {
   HealthPayload,
   HourProfilePayload,
   ItemStatsPayload,
+  ProductSummary,
+  ProductsPayload,
   Meta,
   RecipesPayload,
   RowCounts,

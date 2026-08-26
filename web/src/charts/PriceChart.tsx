@@ -81,7 +81,10 @@ export function PriceChart(props: PriceChartProps): React.JSX.Element {
   return (
     <div role="img" aria-label={ariaLabel} style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        {/* Right margin leaves room for the level labels to sit OUTSIDE the plot area. Inside
+            it they were drawn over the series — the "sell band" label landed on the ask line
+            and became unreadable, which defeats labelling it at all. */}
+        <LineChart data={rows} margin={{ top: 8, right: 64, bottom: 0, left: 0 }}>
           <CartesianGrid stroke="var(--color-rule)" strokeDasharray="2 4" vertical={false} />
 
           {/* Shaded first so lines and levels draw over them. */}
@@ -145,7 +148,7 @@ export function PriceChart(props: PriceChartProps): React.JSX.Element {
               strokeWidth={1.5}
               label={{
                 value: level.label,
-                position: "insideTopLeft",
+                position: "right",
                 fill: TONE_VAR[level.tone],
                 fontSize: 11,
               }}

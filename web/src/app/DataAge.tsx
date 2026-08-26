@@ -66,7 +66,10 @@ export function DataAge(): React.JSX.Element {
 
   if (error !== undefined && data === undefined) {
     return (
-      <span className="inline-flex items-center gap-2 text-xs text-outage" role="status">
+      <span
+        className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-outage"
+        role="status"
+      >
         <span className="size-1.5 rounded-full bg-outage" aria-hidden />
         status unavailable
       </span>
@@ -75,7 +78,8 @@ export function DataAge(): React.JSX.Element {
 
   const age = data?.dataAgeSeconds ?? null;
   const freshness = freshnessOf(age);
-  const label = age === null ? "no ingest on record" : `${formatAge(age)} old`;
+  // Short enough to sit in a 375px header without wrapping. The long form is in the title.
+  const label = age === null ? "no data yet" : `${formatAge(age)} old`;
   const title =
     data?.lastIngestAt != null
       ? `Last successful ingest ${formatInstant(data.lastIngestAt, settings.timeZone)}`
@@ -83,7 +87,7 @@ export function DataAge(): React.JSX.Element {
 
   return (
     <span
-      className={`inline-flex items-center gap-2 text-xs ${TEXT_CLASS[freshness]}`}
+      className={`inline-flex items-center gap-2 whitespace-nowrap text-xs ${TEXT_CLASS[freshness]}`}
       title={title}
       role="status"
     >

@@ -187,3 +187,20 @@ export interface StatusPayload {
   readonly rowCounts: RowCounts;
   readonly runs: Readonly<Record<RunKind, RunStatus | null>>;
 }
+
+/**
+ * GET /api/products — the catalogue, for the item index.
+ *
+ * `tier` is on the wire because it changes what a detail page can show: Tier A tags keep
+ * five-minute snapshots, Tier B only hourly (CLAUDE.md §2), so a Tier B chart is coarser
+ * through no fault of the item. A reader should learn that before clicking, not after.
+ */
+export interface ProductSummary {
+  readonly tag: string;
+  readonly tier: "A" | "B";
+  readonly isEnchanted: boolean;
+  readonly firstSeen: number;
+  readonly lastSeen: number;
+}
+
+export type ProductsPayload = readonly ProductSummary[];

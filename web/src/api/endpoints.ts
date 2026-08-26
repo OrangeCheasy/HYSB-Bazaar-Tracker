@@ -6,6 +6,7 @@ import type {
   HealthPayload,
   HourProfilePayload,
   ItemStatsPayload,
+  ProductsPayload,
   RecipesPayload,
   ScanRow,
   StatusPayload,
@@ -102,4 +103,9 @@ export function fetchItemHours(
  *  anvil recipe ships unverified, so the flag is load-bearing rather than an edge case. */
 export function fetchRecipes(signal?: AbortSignal): Promise<ApiResult<RecipesPayload>> {
   return apiGet("/api/recipes", signal);
+}
+
+/** The catalogue, for the item index. Navigation, not analysis — no prices on it. */
+export function fetchProducts(signal?: AbortSignal): Promise<ApiResult<ProductsPayload>> {
+  return apiGet("/api/products", signal);
 }

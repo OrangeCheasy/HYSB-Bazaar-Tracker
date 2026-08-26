@@ -70,3 +70,18 @@ export function formatPercentPoints(points: number, digits = 1): string {
   if (!Number.isFinite(points)) return "—";
   return `${points.toFixed(digits)}%`;
 }
+
+/**
+ * A duration in hours, at a resolution a reader can act on.
+ *
+ * A high-volume material clears its queue in seconds, and `(0.0015).toFixed(1)` renders
+ * that as "0.0h" — which reads as *no time at all* rather than *no wait*. Below an hour the
+ * unit changes; `Infinity` means the flow that would clear it is zero, and "never" is the
+ * honest word for that rather than a very large number.
+ */
+export function formatHours(hours: number): string {
+  if (!Number.isFinite(hours)) return "never";
+  if (hours >= 1) return `${hours.toFixed(1)}h`;
+  const minutes = hours * 60;
+  return minutes >= 1 ? `${Math.round(minutes)}m` : "<1m";
+}

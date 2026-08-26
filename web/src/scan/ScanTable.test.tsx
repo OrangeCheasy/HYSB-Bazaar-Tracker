@@ -75,7 +75,8 @@ function render(rows: readonly ScanRow[]): string {
 }
 
 function cells(html: string): string[] {
-  const body = html.slice(html.indexOf("<tbody>"));
+  // `<tbody` without the closing bracket: the element carries classes now.
+  const body = html.slice(html.indexOf("<tbody"));
   return [...body.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((m) =>
     (m[1] ?? "").replace(/<[^>]*>/g, "").trim(),
   );
@@ -121,11 +122,16 @@ describe("a margin never renders alone", () => {
   });
 
   it("shows no margin at all rather than a bare one when a row has no analysis", () => {
-    const values = cells(render([fixture({ analysis: undefined, error: "no-base-data" })]));
-    expect(values).not.toContain("-1.3%");
-    expect(text(render([fixture({ analysis: undefined, error: "no-base-data" })]))).toContain(
-      "no-base-data",
-    );
+    const html = render([fixture({ analysis: undefined, error: "no-base-data" })]);
+    expect(cells(html)).not.toContain("-1.3%");
+  });
+
+  it("explains an unscored row in words, never as the internal error code", () => {
+    // `no-base-data` is a variable name. It must not reach a reader, in the cell or in the
+    // tooltip — the explanation is what tells them the row is fine and just waiting.
+    const html = render([fixture({ analysis: undefined, error: "no-base-data" })]);
+    expect(html).not.toContain("no-base-data");
+    expect(html).toContain("No price history has been collected for the base material yet");
   });
 });
 

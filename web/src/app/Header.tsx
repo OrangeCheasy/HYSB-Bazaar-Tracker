@@ -26,10 +26,15 @@ function navClass({ isActive }: { isActive: boolean }): string {
 export function Header({ onOpenSettings }: { onOpenSettings: () => void }): React.JSX.Element {
   return (
     <header className="sticky top-0 z-20 border-b border-rule bg-ground/95 backdrop-blur">
-      <div className="mx-auto flex max-w-[110rem] items-center gap-3 px-4 py-2 sm:px-6">
+      {/* `flex-wrap` is not cosmetic. Brand, three nav items, the freshness chip and the
+          settings button do not fit in 375px, and flex items default to `min-width: auto`
+          — so without wrapping they force the header wider than the viewport, which
+          scrolls the WHOLE PAGE sideways and pushes table columns off-screen. The domain
+          half of the brand is dropped at that width for the same reason. */}
+      <div className="mx-auto flex max-w-[110rem] flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 sm:flex-nowrap sm:px-6">
         <NavLink to="/" className="shrink-0 text-sm font-semibold tracking-tight text-ink">
           bazaar
-          <span className="text-ink-faint">.liamthemo.com</span>
+          <span className="hidden text-ink-faint sm:inline">.liamthemo.com</span>
         </NavLink>
 
         <nav className="flex items-center gap-1" aria-label="Views">

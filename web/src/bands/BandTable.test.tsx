@@ -57,7 +57,8 @@ function render(rows: readonly BandScanRow[]): string {
 
 /** Cell contents in document order, tags stripped. */
 function cells(html: string): string[] {
-  const body = html.slice(html.indexOf("<tbody>"));
+  // `<tbody` without the closing bracket: the element carries classes now.
+  const body = html.slice(html.indexOf("<tbody"));
   return [...body.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((m) =>
     (m[1] ?? "").replace(/<[^>]*>/g, "").trim(),
   );

@@ -5,7 +5,7 @@ import { useApi } from "../api/useApi.js";
 import { HourChart, PriceChart } from "../charts/lazy.js";
 import { dailySpans, windowHours } from "../charts/spans.js";
 import type { Series, Span } from "../charts/types.js";
-import { formatAge, formatCoins, formatHour, formatPercent } from "../format.js";
+import { formatAge, formatCoins, formatHour, formatHours, formatPercent } from "../format.js";
 import { EntryLadder } from "../scan/EntryLadder.js";
 import { FlagExplanations } from "../scan/CraftFlags.js";
 import { utcOffsetHours } from "../settings/schema.js";
@@ -160,16 +160,24 @@ function CraftBody({ row }: { readonly row: CraftRow }): React.JSX.Element {
   return (
     <>
       {analysis !== undefined && (
-        <div className="grid gap-2 lg:grid-cols-3">
-          {(["floor", "orders", "timed"] as const).map((kind) => (
-            <ScenarioCard
-              key={kind}
-              kind={kind}
-              scenario={analysis.scenarios[kind]}
-              highlight={kind === "timed"}
-            />
-          ))}
-        </div>
+        <>
+          {/* An h2 before the cards, whose titles are h3. Without it the page jumps h1 to
+              h3, which a screen-reader user navigating by heading reads as a missing
+              section — and it needed a label anyway. */}
+          <h2 className="mb-2 text-xs font-semibold tracking-wide text-ink-faint uppercase">
+            Three ways to price this craft
+          </h2>
+          <div className="grid gap-2 lg:grid-cols-3">
+            {(["floor", "orders", "timed"] as const).map((kind) => (
+              <ScenarioCard
+                key={kind}
+                kind={kind}
+                scenario={analysis.scenarios[kind]}
+                highlight={kind === "timed"}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       {analysis !== undefined && (
@@ -192,9 +200,7 @@ function CraftBody({ row }: { readonly row: CraftRow }): React.JSX.Element {
           <div className="border border-rule bg-surface px-3 py-2">
             <p className="text-ink-faint">Hours to fill one craft</p>
             <p className="num mt-1 text-base text-ink">
-              {Number.isFinite(analysis.throughput.hoursToFillOneCraft)
-                ? `${analysis.throughput.hoursToFillOneCraft.toFixed(1)}h`
-                : "never"}
+              {formatHours(analysis.throughput.hoursToFillOneCraft)}
             </p>
           </div>
           <div className="border border-rule bg-surface px-3 py-2">

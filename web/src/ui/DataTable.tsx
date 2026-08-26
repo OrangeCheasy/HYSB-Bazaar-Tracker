@@ -50,7 +50,7 @@ function cellClasses<Row>(column: Column<Row>, row: Row): string {
       : (column.cellClassName ?? "");
   const align = column.align === "left" ? "text-left" : "text-right";
   const mobile = column.hideOnMobile === true ? "hidden sm:table-cell" : "";
-  return `px-2 py-1 ${align} ${mobile} ${extra}`.trim();
+  return `min-w-0 px-2 py-1 ${align} ${mobile} ${extra}`.trim();
 }
 
 function SortHeader<Row>({
@@ -117,7 +117,18 @@ export function DataTable<Row>({
   readonly rowClassName?: (row: Row) => string;
 }): React.JSX.Element {
   return (
-    <table role="table" className="w-full border-collapse text-sm">
+    /*
+     * `block` below 640px, `table` above it.
+     *
+     * This is load-bearing, not tidying. A `<table>` sizes itself from its content, and
+     * below 640px its rows are `display: grid` with `1fr` columns that size themselves from
+     * the table — a circular constraint, which CSS resolves by falling back to max-content.
+     * The result was a table wider than the viewport, scrolling the whole page sideways and
+     * pushing the sell-side fill rate off-screen entirely. A rule that says a figure must be
+     * adjacent and visible is not satisfied by being in the DOM 40px past the right edge.
+     * Making the outer box `block` breaks the cycle, so `1fr` resolves against the viewport.
+     */
+    <table role="table" className="block w-full border-collapse text-sm sm:table">
       {/* Hidden on mobile: with no column grid there is nothing for a header row to label,
           and the sort moves to the select in the control bar. */}
       <thead className="hidden border-b border-rule-strong text-xs text-ink-faint sm:table-header-group">
@@ -127,7 +138,7 @@ export function DataTable<Row>({
           ))}
         </tr>
       </thead>
-      <tbody>
+      <tbody className="block sm:table-row-group">
         {rows.map((row) => (
           <tr
             key={rowKey(row)}

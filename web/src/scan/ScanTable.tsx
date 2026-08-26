@@ -1,12 +1,14 @@
 import { Link } from "react-router";
 import type { ScanRow } from "@core/index.js";
-import { formatCoins, formatPercent } from "../format.js";
+import { formatCoins, formatHours, formatPercent } from "../format.js";
 import { displayTag } from "../tagName.js";
 import { DataTable, type Column } from "../ui/DataTable.js";
 import { columnList, pairedColumns } from "../ui/pairedColumns.js";
 import { CraftFlags } from "./CraftFlags.js";
+import { errorCopy } from "./errorCopy.js";
 import {
   HEADLINE_SCENARIO,
+  isSuspicious,
   nextScanSort,
   productName,
   type ScanSort,
@@ -106,6 +108,12 @@ const MARGIN: Column<ScanRow> = {
   cellClassName: (row) => {
     const scenario = headline(row);
     if (scenario === undefined) return "num";
+    // A flagged margin is never painted as a gain, however large it is. `Ultimate Wise 5`
+    // shows 113.4% against a fill feasibility of 0.0003% — rendering that in profit-green
+    // tells a reader "excellent" with the site's strongest visual signal while the row is
+    // simultaneously demoted for being implausible. Amber says "look closer", which is the
+    // whole point of the flag.
+    if (isSuspicious(row)) return "num text-late";
     return `num ${scenario.profitPerCraft >= 0 ? "text-profit" : "text-loss"}`;
   },
   render: (row) => {
@@ -152,15 +160,22 @@ const COLUMNS = columnList<ScanRow>([
       `num ${
         row.analysis === undefined
           ? ""
-          : row.analysis.profitPerDay >= 0
-            ? "text-profit"
-            : "text-loss"
+          : isSuspicious(row)
+            ? "text-late"
+            : row.analysis.profitPerDay >= 0
+              ? "text-profit"
+              : "text-loss"
       }`,
     render: (row) =>
       row.analysis === undefined ? (
-        // The reason takes the place of the number, so an unscored row explains itself
-        // where the figure would have been rather than just being blank.
-        <span className="text-xs text-ink-faint">{row.error ?? "no data"}</span>
+        // An em dash like every other cell on the row, with the reason on hover and on the
+        // detail page. Spelling "awaiting data" out here put the same two words on 42 of 45
+        // rows and wrapped them over two lines at 375px — repetition that crowds out the
+        // rows that DO have numbers. The control bar states the count once, which is where
+        // a reader learns how much of the table is waiting.
+        <span className="text-ink-faint" title={errorCopy(row.error).detail}>
+          —
+        </span>
       ) : (
         formatCoins(row.analysis.profitPerDay)
       ),
@@ -192,11 +207,7 @@ const COLUMNS = columnList<ScanRow>([
       const hours = row.analysis?.throughput.hoursToFillOneCraft;
       if (hours === undefined) return NO_DATA;
       if (!Number.isFinite(hours)) return <span title="No base flow at all">never</span>;
-      // A high-volume material fills a craft in seconds, and rendering that as "0.00h"
-      // reads as no time rather than as no wait. Below an hour, switch units.
-      if (hours >= 1) return `${hours.toFixed(1)}h`;
-      const minutes = hours * 60;
-      return minutes >= 1 ? `${Math.round(minutes)}m` : "<1m";
+      return formatHours(hours);
     },
   },
   {
@@ -241,7 +252,12 @@ export function ScanTable({
       // one product — so neither tag alone is a key.
       rowKey={(row) => `${row.recipe.baseTag}->${row.recipe.enchTag}`}
       mobileAreas={MOBILE_AREAS}
-      rowClassName={(row) => (row.analysis === undefined ? "opacity-60" : "")}
+      // No opacity dimming on unscored rows. It measured 2.55:1 against the ground —
+      // `opacity` composites the text colour toward the background, so a token that passes
+      // AA on its own fails once a parent fades it, and no amount of checking the palette
+      // catches that. These rows are already unmistakable: every numeric cell is an em dash
+      // and the profit column carries the reason in words.
+      rowClassName={() => ""}
     />
   );
 }

@@ -4,7 +4,9 @@ import { BandsView } from "./views/BandsView.js";
 import { ScanView } from "./views/ScanView.js";
 import { BandDetailView } from "./views/BandDetailView.js";
 import { CraftDetailView } from "./views/CraftDetailView.js";
-import { ItemDetailView, ItemsView, NotFoundView } from "./views/index.js";
+import { ItemDetailView } from "./views/ItemDetailView.js";
+import { ItemsView } from "./views/ItemsView.js";
+import { NotFoundView } from "./views/NotFoundView.js";
 
 /**
  * Routes.

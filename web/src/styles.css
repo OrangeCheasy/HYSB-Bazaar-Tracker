@@ -19,9 +19,14 @@
   --color-rule: #1e232a;
   --color-rule-strong: #2b323b;
 
+  /* Every one of these is checked against both --color-ground and --color-surface at WCAG
+     AA for small text (4.5:1), because all three get used at 10-12px in a dense table.
+     `ink-faint` was #6c7683 and measured 4.22:1 — close enough to look fine and still fail,
+     which is exactly how a contrast bug survives a design review. Ratios now: ink 15.9,
+     ink-dim 8.4, ink-faint 5.1. */
   --color-ink: #e6e8eb;
   --color-ink-dim: #a2abb6;
-  --color-ink-faint: #6c7683;
+  --color-ink-faint: #7a8492;
 
   /* Semantic only. A number is green because it is a profit, never because green looks
      good in a table. */
@@ -85,6 +90,17 @@
   }
 
   a:hover {
+    text-decoration: underline;
+  }
+
+  /**
+   * A link sitting inside a sentence must be distinguishable by something other than
+   * colour (WCAG 1.4.1) — a reader who cannot separate the accent from the body text has
+   * no way to see it is a link at all. Standalone links in tables and nav are exempt:
+   * their position already marks them, and underlining every tag in a 200-row table would
+   * turn the column into noise.
+   */
+  p a {
     text-decoration: underline;
   }
 

@@ -158,6 +158,39 @@ means nothing to a user — write the sentence that explains what they should
 actually do about it.
 ```
 
+## Session 5e — item page
+
+```
+Build the item index and the item detail page — the last of the six views
+in docs/ROADMAP.md Phase 5.
+
+Item detail: ask/bid history with a range switch, the stats that /api/item
+already returns across 1d/7d/30d, order-book depth, volume and volatility.
+Depth metrics are computed at ingest and stored, and nothing in the UI has
+ever displayed them — surface them or tell me why they are not worth a
+column.
+
+Item index: every tracked product, searchable, so the detail page is
+reachable without knowing a tag. It does not need to be a ranked table —
+this is navigation, not analysis.
+
+Reuse DataTable and PriceChart. If either needs a new capability, add it
+there rather than working around it in the view.
+
+This page carries no trade recommendation, so the adjacency rules have
+nothing to attach to. Do not invent a margin here just to have a headline
+number. If a figure needs a caveat — a volatility computed from four days,
+a depth reading from a single snapshot — put the caveat next to it.
+
+Then close Phase 5: check the three Done-when clauses in the roadmap and
+tell me plainly which are met and which are not.
+```
+
+**Checkpoint:** all six views reachable from the nav, no horizontal overflow at
+375px (`node scripts/shoot.mjs`), Lighthouse still >=90 on the landing route.
+
+---
+
 **Checkpoint per session:** builds, typechecks, works at 375px.
 
 ---

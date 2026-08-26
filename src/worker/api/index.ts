@@ -3,6 +3,7 @@ import type { Env } from "../index.js";
 import { handleBandScan, handleBands } from "./bands.js";
 import { handleCraft } from "./craft.js";
 import { handleItemHistory, handleItemHours, handleItemStats } from "./item.js";
+import { handleProducts } from "./products.js";
 import { handleRecipes } from "./recipes.js";
 import { handleScan } from "./scan.js";
 import { handleStatus } from "./status.js";
@@ -116,6 +117,10 @@ export async function handleApi(
 
   if (segments.length === 2 && segments[1] === "bands") {
     return handleBandScan(url, env);
+  }
+
+  if (segments.length === 2 && segments[1] === "products") {
+    return handleProducts(env);
   }
 
   if (segments.length === 2 && segments[1] === "recipes") {

@@ -31,3 +31,35 @@ export function buildProductsUpsert(
     return db.prepare(sql).bind(...args);
   });
 }
+
+/**
+ * The catalogue, for the item index.
+ *
+ * Read-side counterpart to the upsert above. Tier comes along because it says whether a tag
+ * has five-minute history behind it or only hourly (CLAUDE.md §2) — a Tier B item's charts
+ * are coarser through no fault of the item, and the index is where someone finds that out
+ * before clicking.
+ *
+ * `last_seen` rather than a row count: a tag that stopped appearing in the upstream payload
+ * is still in this table, and its staleness is the useful thing to show.
+ */
+export interface ProductListRow {
+  readonly tag: string;
+  readonly tier: "A" | "B";
+  readonly is_enchanted: number;
+  readonly first_seen: number;
+  readonly last_seen: number;
+}
+
+export async function selectAllProducts(
+  db: Pick<D1Database, "prepare">,
+): Promise<ProductListRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT tag, tier, is_enchanted, first_seen, last_seen
+         FROM products
+        ORDER BY tag`,
+    )
+    .all<ProductListRow>();
+  return results;
+}

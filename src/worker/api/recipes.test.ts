@@ -14,6 +14,7 @@ describe("handleRecipes — meta independent of ingest staleness", () => {
       ratio: 160,
       verified: 1,
       note: null,
+      kind: "compact",
     };
     const db = makeQueuedFakeD1({ all: [[row]] });
 

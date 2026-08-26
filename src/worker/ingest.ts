@@ -1,8 +1,10 @@
 import {
   assignDepthToSides,
   computeDepthMetrics,
+  deriveFamilies,
   err,
   isWellFormed,
+  levelEndpointTags,
   normalizeMany,
   normalizeQuickStatus,
   ok,
@@ -104,14 +106,26 @@ export async function runIngest(env: Env): Promise<void> {
       normalizeProduct(entry, tickTs),
     );
 
-    // Tier A = recipe tags (base_tag UNION ench_tag) plus top ~500 by sellMovingWeek,
-    // recomputed every tick — CLAUDE.md section 2. Never a static list, never a migration.
-    const recipeRows = await env.DB.prepare("SELECT base_tag, ench_tag FROM recipes")
-      .all<{ base_tag: string; ench_tag: string }>();
+    // Tier A = COMPACTION recipe tags, plus top ~500 by sellMovingWeek, plus the lowest
+    // and highest rung of every enchant family — recomputed every tick, CLAUDE.md
+    // section 2. Never a static list, never a migration.
+    //
+    // The `kind = 'compact'` filter is load-bearing. Anvil edges also live in `recipes`,
+    // and unioning their tags the way compaction tags are unioned would promote all 777
+    // book tags rather than the ~295 level endpoints — roughly 1,270 Tier A tags instead
+    // of ~795, and ~394 MB of snapshots against the ~243 MB section 2 budgets for. The
+    // endpoints are 91% of book coin turnover; the rungs in between are waypoints a merge
+    // passes through, not things anyone trades, and `hourly` covers them fine.
+    const recipeRows = await env.DB.prepare(
+      "SELECT base_tag, ench_tag FROM recipes WHERE kind = 'compact'",
+    ).all<{ base_tag: string; ench_tag: string }>();
     const recipeTags = new Set<string>();
     for (const r of recipeRows.results) {
       recipeTags.add(r.base_tag);
       recipeTags.add(r.ench_tag);
+    }
+    for (const tag of levelEndpointTags(deriveFamilies(normalized.map((p) => p.tag)))) {
+      recipeTags.add(tag);
     }
     const bySellMovingWeekDesc = [...normalized]
       .sort((a, b) => b.sellMovingWeek - a.sellMovingWeek)

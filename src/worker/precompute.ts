@@ -1,3 +1,4 @@
+import { precomputeBandScan } from "./bandScan.js";
 import { recordRun } from "./db/runs.js";
 import { DEFAULT_SCAN_PARAMS, runScan } from "./scan.js";
 import type { Env } from "./index.js";
@@ -41,9 +42,15 @@ export async function runPrecompute(env: Env): Promise<void> {
     };
     await env.CACHE.put(SCAN_KV_KEY, JSON.stringify(payload));
 
+    // The band scan shares this cron because it has the same cadence: a band only moves
+    // when a new hour lands, and the rollup that produced that hour just ran. Written as
+    // a second key rather than folded into the first — they are different payloads with
+    // different consumers, and a shape change to one should not invalidate the other.
+    const bandRows = await precomputeBandScan(env, startedAt);
+
     await recordRun(env, "precompute", startedAt, Date.now() - t0, {
-      productsSeen: result.rows.length,
-      rowsWritten: 1,
+      productsSeen: result.rows.length + bandRows,
+      rowsWritten: 2,
     });
   } catch (e) {
     await recordRun(env, "precompute", startedAt, Date.now() - t0, {

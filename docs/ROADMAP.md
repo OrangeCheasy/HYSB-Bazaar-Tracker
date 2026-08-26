@@ -239,6 +239,11 @@ Read CLAUDE.md §8's two new subsections before starting. They carry the domain 
 section is only the build order.
 
 ### Part A — the conversion graph (do this first, both parts need it)
+**Status: DONE 2026-08-26.** `packages/core/src/convert.ts` + 24 tests. Core coverage
+98.35% stmts / 94.75% branch / 100% lines. One uniform edge type, no discriminated union —
+`2^k` emerges from composing k edges of `inputPerOutput: 2` rather than being a special
+case. Multiplicative shortest path, Dijkstra-safe because `inputPerOutput >= 1` means
+traversing an edge never lowers cost, so cyclic recipe graphs cannot spiral.
 
 `packages/core/src/convert.ts`. A recipe stops being "base × ratio → product" and becomes
 an edge in a graph; what the model wants is the **cheapest path** to one unit of the
@@ -253,6 +258,21 @@ output. This single module serves three purposes:
 Build it generic over edges. Do not special-case anvils.
 
 ### Part B — anvil merges
+**Status: DONE 2026-08-26**, deployed `a078afbe`. 293 tests green. Measured in production:
+**620 anvil edges** from 155 families, all `verified = 0`; Tier A is **793 tags of which
+295 are book level-endpoints**; `/api/scan` returns **144 rows — 43 compaction and 101
+anvil, ranked in one list by profit/day**. KV payload 263 KB, warm reads ~100ms TTFB.
+
+**Resolved during the same session (ADR-025), deployed `a43323ca`.** The first anvil scan
+ranked `ENCHANTMENT_LOOTING_4 → _5` first at 2.88 billion profit/day — a 1,509% margin on a
+merge that does not exist, because Looting V comes from a minigame rather than an anvil.
+Edges whose implied merge ratio exceeds 3 are now withheld and the family re-targets the
+highest rung a merge can actually reach. 45 of 320 judgeable edges are gated; the top of
+the ranking now sits at −1% to 0% floor margins, the band section 8 predicts.
+
+Fixed alongside: the book price feed keyed off one global `MAX(hour_ts)` — a partial hour —
+and so priced only 482 of 777 book tags, dropping exactly the thin high-value top rungs the
+scan exists to evaluate. Now a per-tag latest price over a 48h lookback.
 
 - `packages/core/src/anvil.ts` — parse `ENCHANTMENT_{ENCHANT}_{LEVEL}` into (family,
   level); derive each family's level range from the product list, never a hardcoded map
@@ -264,6 +284,28 @@ Build it generic over edges. Do not special-case anvils.
 - Seed anvil recipes for every family, all `verified = 0`
 
 ### Part C — weekly bands
+**Status: core + per-tag endpoint DONE 2026-08-26**, deployed `86ef7dcb`. 336 tests green.
+`packages/core/src/bands.ts` and `GET /api/bands/:tag?days=&pLow=&pHigh=`. Confirmed no
+migration was needed — `hourly` already carries `bid_min/avg/max` and `ask_min/avg/max`.
+
+The sides test was written before the implementation and mutation-verified: flipping the
+two percentile lines fails 12 tests, three of them named for the inversion. A second
+mutation (touch tested against `bidMax` instead of `bidMin`) fails 2.
+
+**Part C is now complete**, deployed `2c19cf17`. `GET /api/bands` ranks every Tier A tag
+best-to-worst by profit/day, precomputed to `bands:default:v1` by the hourly cron and
+served as a single KV read on default parameters.
+
+The budget problem is solved by streaming, not by cutting scope. Rows are pulled in bulk
+pages `ORDER BY tag` and each tag's band is finalized the moment the tag changes, so the
+cost is `rows / page size` (~14 pages) rather than 793 queries, and resident memory is one
+tag's 168 bars rather than 133k objects. `pageSize` is injectable so the pagination is
+genuinely tested with small pages.
+
+Ranking is volume-and-feasibility-adjusted, never spread alone: profit/day is net-per-unit
+(tax on the sell leg only) times daily flow on the binding side, times capture, times the
+LIMITING hit-rate — both legs must fill, so a wide band nobody's order reaches is worth
+zero per day rather than a lot.
 
 - `packages/core/src/bands.ts` — trailing-window percentile bands plus hit-rate
 - `GET /api/bands/:tag?days=&pLow=&pHigh=` — buy band, sell band, hit counts, week count

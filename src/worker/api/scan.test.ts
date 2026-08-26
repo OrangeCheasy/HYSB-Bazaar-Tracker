@@ -35,7 +35,9 @@ describe("handleScan — stale data", () => {
     // No SCAN_KV_KEY entry, and a zero-recipe D1 — enough to prove the fallback path
     // actually runs and stays honest (dataTo === now when nothing succeeded), without
     // needing a full recipe/hourly-data fixture just to exercise this branch.
-    const env = makeFakeEnv({ kv: makeFakeKV({}), db: makeQueuedFakeD1({ all: [[]] }) });
+    // Two seeded .all() responses, not one: runScan queries compaction recipes and anvil
+    // recipes separately, and both return empty here.
+    const env = makeFakeEnv({ kv: makeFakeKV({}), db: makeQueuedFakeD1({ all: [[], []] }) });
 
     const res = await handleScan(new URL("https://bazaar.example/api/scan"), env);
     expect(res.status).toBe(200);
@@ -49,7 +51,7 @@ describe("handleScan — stale data", () => {
 describe("handleScan — query parameter validation", () => {
   const badRequest = async (query: string) => {
     const kv = makeFakeKV({});
-    const env = makeFakeEnv({ kv, db: makeQueuedFakeD1({ all: [[]] }) });
+    const env = makeFakeEnv({ kv, db: makeQueuedFakeD1({ all: [[], []] }) });
     const res = await handleScan(new URL(`https://bazaar.example/api/scan?${query}`), env);
     const body = (await res.json()) as { error?: string };
     return { status: res.status, error: body.error ?? "" };
@@ -87,7 +89,7 @@ describe("handleScan — query parameter validation", () => {
 
   it("accepts in-range values, including the real Mayor Aura tax of 2.25%", async () => {
     const kv = makeFakeKV({});
-    const env = makeFakeEnv({ kv, db: makeQueuedFakeD1({ all: [[]] }) });
+    const env = makeFakeEnv({ kv, db: makeQueuedFakeD1({ all: [[], []] }) });
     const res = await handleScan(
       new URL("https://bazaar.example/api/scan?tax=0.0225&capture=0.5&window=6"),
       env,

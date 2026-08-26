@@ -21,8 +21,8 @@ export interface PruneResult {
  */
 export async function boundedDelete(
   db: Pick<D1Database, "prepare">,
-  table: "snapshots" | "hourly",
-  tsColumn: "ts" | "hour_ts",
+  table: "snapshots" | "hourly" | "daily",
+  tsColumn: "ts" | "hour_ts" | "day_ts",
   cutoff: number,
   batchSize: number,
   maxBatches: number,

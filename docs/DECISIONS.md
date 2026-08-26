@@ -522,3 +522,163 @@ before the first successful precompute of any new deploy.
 them with `wrangler kv key get` instead, or re-add the flag deliberately for one session
 and remove it again. The failure this prevents is silent and production-visible; the
 inconvenience it creates is neither.
+
+---
+
+## ADR-021 — Nothing is retained longer than 30 days
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+Every table and the R2 archive prune at 30 days. `hourly` and `daily` were previously
+"keep indefinitely"; `snapshots` stays at 7 days, unchanged.
+
+This is a **product** decision, not a storage workaround. The site's primary feature is a
+*trailing* weekly high/low band used to place buy orders at the low and sell offers at the
+high (CLAUDE.md section 8). A price from six weeks ago is not evidence about next week's
+band, so the data was being kept for a use that does not exist. Storage was never the
+binding constraint — `hourly` was only ~231 MB/year — which is precisely why an
+indefinite-retention policy could have survived unexamined for years.
+
+What it buys, beyond simplicity: the system reaches a steady state and stays there. D1
+lands at ~538 MB flat (about 5% of the 10 GB cap) instead of climbing, and the R2 archive
+stops at ~2.3 GB, which keeps it permanently inside the free tier rather than exhausting
+it around day 75. Capacity planning stops being a recurring question.
+
+**Costs, all real and all accepted:**
+
+- **Phase 8 becomes a rolling window, not an archive.** We are no longer the place to get
+  historical bazaar data, and the manifest has to say so. Weaker product, but also a
+  weaker claim on Hypixel's API policy, which is not nothing.
+- **Gaps hurt more, not less.** Against an unbounded archive a three-day outage is a
+  rounding error; against a 30-day window it is 10% of everything the site knows, and 43%
+  of the input to any given weekly band. Retention shrank; section 3b's monitoring
+  requirement did not.
+- **Backfill is capped at 30 days.** Fetching older data spends someone else's rate limit
+  on rows the next prune deletes (ADR-017, ROADMAP Phase 3).
+- **Reprocessing has a horizon.** There is no deep archive to rebuild a derived table from
+  if a rollup bug is found late. Bugs older than a month are unrecoverable by definition.
+
+The clause most likely to be attacked later is the R2 delete, on a "storage is cheap,
+let's just keep it" instinct. Storage being cheap was never the argument.
+
+---
+
+## ADR-022 — Book level-endpoints are Tier A regardless of volume
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+Tier A gains a third clause: the **lowest- and highest-level book of every enchant
+family**, in addition to recipe tags and the top ~500 by `sellMovingWeek`. This adds ~283
+tags, taking Tier A from 501 to ~784.
+
+The existing volume rule put exactly **3** of 774 book tags into Tier A, which would have
+made anvil merging (ADR-023) unbuildable — the strategy consumes level-1 books and
+produces max-level books, and neither rung was being sampled at five-minute resolution.
+
+Ranking books by unit volume is the trap, and it is not obvious. Measured against a live
+hour:
+
+| Level position | Tags | % unit volume | % coin turnover | Avg price |
+|---|---|---|---|---|
+| Lowest | 143 | 72.3% | 70.1% | 2.8M |
+| Max | 143 | **4.6%** | **21.0%** | 20.0M |
+| Intermediate | 476 | 22.9% | 7.9% | 2.0M |
+
+Max-level books are 4.6% of units but **21% of coin turnover**, because they average 20M
+coins each against 2.8M for level 1. Any volume-ranked rule drops exactly the rung the
+strategy sells into. Level-1 + max together are 91% of book coin turnover in 286 of 774
+tags, so the endpoints are also the efficient cut — the 476 intermediate tags carry 7.9%.
+
+Intermediate levels stay Tier B unless they earn a slot on volume like anything else. They
+are still priced for the cheapest-path solver, just from `hourly` rather than `snapshots`.
+
+**Cost:** ~56% more five-minute rows written. At ~16.8M rows/month including deletes
+against the 50M included, this stays inside the "keep roughly half the write budget free"
+rule in CLAUDE.md section 2. It would not have, without ADR-021's retention cap.
+
+---
+
+## ADR-023 — One cheapest-path solver, not per-craft-type logic
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+Anvil book merging and multi-step compaction are implemented as one generic
+conversion-graph solver (`packages/core/src/convert.ts`), not as two code paths.
+
+A recipe stops being "base × ratio → product" and becomes an edge; the question becomes
+the cheapest path to one unit of output. Two apparently unrelated problems turn out to be
+the same one:
+
+- **Anvil chains.** Two books of level N make one of level N+1, so reaching level M from
+  level L costs `2^(M-L)` books — Sharpness 1 → 7 is 64 books, not 6. Every intermediate
+  rung is itself tradeable, so entering at level 3 is often cheaper than at level 1. The
+  search over entry levels *is* the feature; a flat `ratio` column cannot express it.
+- **Tier-2 compaction.** `SUGAR_CANE → ENCHANTED_SUGAR → ENCHANTED_SUGAR_CANE` is a
+  two-step path priced identically. Seeded as a single 160:1 step, it reported a ~3,000%
+  margin and ranked **first** in production at 1.77 billion profit/day. Implied price ratio
+  across the other 41 recipes lands between 0.04 and 1.23; this one was 29.05.
+
+Building anvil logic separately would mean discovering the same class of bug twice and
+fixing it twice. The production SUGAR_CANE bug is the existence proof that the flat-ratio
+model was already insufficient before books were considered.
+
+Note what worked: the engine flagged that row `unverified-recipe` and `implausible-margin`
+on its own. CLAUDE.md section 8's "a 200% margin means something is wrong" heuristic did
+its job. What was missing was anything preventing a flagged row from ranking first — a
+ranking concern, not a detection one.
+
+**Cost:** more upfront design than a second `if` branch, and a graph solver is harder to
+read than a multiplication. Accepted because `recipes` gains a `kind` discriminator either
+way, and the alternative is two divergent implementations of the same arithmetic.
+
+---
+
+## ADR-024 — 0004/0005 are emptied so the migration chain can replay
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+`0004_fix_remote_0001_drift.sql` and `0005_fix_remote_0001_drift_products_runs.sql` are
+reduced to comment-only files (a bare `SELECT 1;` to keep wrangler happy). Their original
+statements are preserved verbatim in those comments. This edits migrations that have
+already been applied, which CLAUDE.md section 5 forbids.
+
+**The problem.** Both files were one-time repairs for drift on the *remote* database,
+caused by editing `0001` after it had been applied there. Their statements are
+unconditional `ALTER TABLE ... ADD COLUMN`, and on any clean database `0002` has already
+added every one of those columns. So a fresh chain died:
+
+```
+0001 ✅ → 0002 ✅ → 0003 ✅ → 0004 ✗ duplicate column name: ask_depth_1pct
+```
+
+Reproduced from scratch before deciding. That is not a dev-convenience bug: it means no
+preview environment, no second dev machine, no disaster recovery, and ROADMAP Phase 6's
+"CI runs migrations then deploys" could never have worked. The migration set had quietly
+stopped being able to build the thing it describes.
+
+**Why editing them is safe.** D1's bookkeeping is `d1_migrations (id, name UNIQUE,
+applied_at)` — name-based, with no content hash. Remote recorded both filenames on
+2026-08-25 and will never read them again. Verified before acting, not assumed.
+
+**Why not a squash.** Squashing `0001`–`0005` into a baseline was the other candidate and
+is the more conventional answer. It was rejected because it edits *more* applied
+migrations (five instead of two) and additionally requires rewriting production's
+`d1_migrations` rows by hand. Strictly more risk for the same end state. Emptying two
+provably dead files is the smaller change.
+
+**Verification.** A from-scratch replay now produces a database byte-identical to
+production across all six application tables, with the same 43 recipes and — after
+ADR-024's companion migration `0007` — the same five indexes.
+
+**What this exposed on the way.** The index sets did *not* match. Production carried
+`idx_daily_day_ts` and `idx_runs_kind_started`, which appear in no migration, and lacked
+`idx_runs_started`, which `0001` creates. Someone had created indexes directly against
+production. That is the same failure as editing a migration, pointed the other way, and it
+is invisible until you try to build a second database. `0007` reconciles it by justifying
+each index against a query that exists in the code, and drops `idx_runs_started`, which no
+query needs.
+
+**Cost.** The rule in CLAUDE.md section 5 now has a documented exception, and exceptions
+erode rules. Mitigated by stating the bar explicitly — "provably dead *and* actively breaks
+new databases" — and by adding the replay check to section 5, so the property this rule
+exists to protect is something you can actually test instead of merely intend.

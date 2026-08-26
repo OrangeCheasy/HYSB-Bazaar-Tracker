@@ -1,28 +1,34 @@
 -- 0005_fix_remote_0001_drift_products_runs.sql
--- Forward-only. Never edit an applied migration; add a new numbered file instead.
 --
--- Continuation of the drift fixed in 0004: `migrations/0001_initial.sql` was edited in
--- place after remote had already applied it (see 0004's header comment for the full
--- story). That same edit also added `products.tier` (+ `idx_products_tier`) and
--- `runs.rows_deleted` / `runs.db_size_bytes`, none of which reached remote either.
--- Confirmed via `PRAGMA table_info(products)` / `PRAGMA table_info(runs)` against
--- remote: both are still on the pre-edit shape. src/worker/db/tiers.ts,
--- src/worker/db/products.ts, src/worker/ingest.ts, and src/worker/db/runs.ts all
--- already query against the target shape below.
+-- NEUTERED 2026-08-26. This file intentionally contains no statements. See ADR-024.
 --
--- Not touched here: remote also still has `idx_runs_kind_started` instead of the
--- current file's `idx_runs_started`, and an extra `idx_daily_day_ts` the current file
--- no longer creates. Both are harmless leftover indexes -- no query fails for their
--- presence or the other's absence -- so this migration only adds what's load-bearing.
+-- ============================================================================
+-- Read this before "restoring" the statements below into something runnable.
+-- ============================================================================
 --
--- Remote-only in effect, same caveat as 0004: a fresh full-chain database (local dev,
--- or a from-scratch remote D1) already has `tier`/`rows_deleted`/`db_size_bytes` via
--- the current 0001 file directly, so running this file's SQL there would fail with
--- "duplicate column name". Mark it applied via a direct `d1_migrations` INSERT instead
--- of executing it, exactly like 0004.
+-- What this migration used to do:
+--
+--   ALTER TABLE products ADD COLUMN tier TEXT NOT NULL DEFAULT 'B';
+--   CREATE INDEX idx_products_tier ON products (tier);
+--   ALTER TABLE runs ADD COLUMN rows_deleted INTEGER;
+--   ALTER TABLE runs ADD COLUMN db_size_bytes INTEGER;
+--
+-- Same cause as 0004: the in-place edit of an already-applied `0001_initial.sql` left the
+-- REMOTE database without columns the repo assumed existed. 0004 repaired `snapshots` and
+-- `hourly`; this file repaired `products` and `runs`.
+--
+-- Why it is now empty: the current `0001_initial.sql` already creates `products.tier`,
+-- `runs.rows_deleted` and `runs.db_size_bytes` directly in its CREATE TABLE statements.
+-- On a clean database these ALTERs fail with `duplicate column name`, which is what broke
+-- replay of the whole migration chain. See 0004's header for the full reasoning and the
+-- verification that a fresh 0001 -> 0002 -> 0003 -> 0006 run reproduces production's
+-- schema exactly.
+--
+-- Nothing is lost by emptying this file, including `idx_products_tier`: `0001_initial.sql`
+-- creates that index itself (line 20), so a fresh replay still produces it. Verified by
+-- listing indexes on a from-scratch database — see 0007, which reconciles the index set
+-- that genuinely did diverge.
+--
+-- Do not delete this file or renumber it. Its NAME is load-bearing; see 0004.
 
-ALTER TABLE products ADD COLUMN tier TEXT NOT NULL DEFAULT 'B';
-CREATE INDEX idx_products_tier ON products (tier);
-
-ALTER TABLE runs ADD COLUMN rows_deleted INTEGER;
-ALTER TABLE runs ADD COLUMN db_size_bytes INTEGER;
+SELECT 1;

@@ -13,7 +13,7 @@ import {
   type RawSnapshotRow,
   type Result,
 } from "@core/index.js";
-import { pruneArchiveDetail } from "./archive.js";
+import { pruneArchiveDetail, pruneArchiveExpired } from "./archive.js";
 import { buildDailyUpsert, type DailyRow } from "./db/daily.js";
 import { buildHourlyReplaceUpsert, type HourlyReplaceRow } from "./db/hourly.js";
 import { boundedDelete } from "./db/prune.js";
@@ -22,8 +22,13 @@ import type { Env } from "./index.js";
 
 const HOUR = 3600;
 const DAY = 86_400;
+// Retention: nothing in this system is kept longer than 30 days (CLAUDE.md section 3,
+// ADR-021). `hourly` and `daily` were previously unbounded — "keep indefinitely" — which
+// is the liability the cap exists to remove. Do not raise these without re-reading
+// ADR-021's cost list; the R2 side of the same policy lives in archive.ts.
 const SNAPSHOT_RETENTION_SECONDS = 7 * DAY;
-const HOURLY_RETENTION_SECONDS = 90 * DAY;
+const HOURLY_RETENTION_SECONDS = 30 * DAY;
+const DAILY_RETENTION_SECONDS = 30 * DAY;
 const PRUNE_BATCH_SIZE = 500;
 const PRUNE_MAX_BATCHES = 20; // up to 10,000 rows/table/run; next run continues if more remain
 
@@ -140,9 +145,13 @@ function normalizeTaggedHourly(
 
 /**
  * Runs at 04:23 daily. Two jobs: roll up yesterday's `hourly` (both tiers) into `daily`,
- * then bounded-prune `snapshots` past 7 days and `hourly` past 90 days. Also downgrades
- * one day's worth of R2 archive detail once it turns 14 days old (CLAUDE.md section 3 /
- * ADR-016) and records an estimated DB size into `runs`.
+ * then enforce retention everywhere — bounded-prune `snapshots` past 7 days, `hourly` and
+ * `daily` past 30 (ADR-021). Also downgrades one day's R2 archive detail once it turns 14
+ * days old and deletes archive objects past 30 (CLAUDE.md section 3 / ADR-016, ADR-021),
+ * then records an estimated DB size into `runs`.
+ *
+ * This is the only thing standing between the design and unbounded growth. If it stops,
+ * nothing else notices — which is why every failure path here records to `runs`.
  */
 export async function runDailyRollup(env: Env): Promise<void> {
   const startedAt = Math.floor(Date.now() / 1000);
@@ -205,11 +214,20 @@ export async function runDailyRollup(env: Env): Promise<void> {
       PRUNE_BATCH_SIZE,
       PRUNE_MAX_BATCHES,
     );
-    if (snapshotPrune.moreRemaining || hourlyPrune.moreRemaining) {
+    const dailyPrune = await boundedDelete(
+      env.DB,
+      "daily",
+      "day_ts",
+      startedAt - DAILY_RETENTION_SECONDS,
+      PRUNE_BATCH_SIZE,
+      PRUNE_MAX_BATCHES,
+    );
+    if (snapshotPrune.moreRemaining || hourlyPrune.moreRemaining || dailyPrune.moreRemaining) {
       console.warn(
         `daily prune: budget exhausted, more rows remain ` +
           `(snapshots moreRemaining=${snapshotPrune.moreRemaining}, ` +
-          `hourly moreRemaining=${hourlyPrune.moreRemaining}) — next run continues`,
+          `hourly moreRemaining=${hourlyPrune.moreRemaining}, ` +
+          `daily moreRemaining=${dailyPrune.moreRemaining}) — next run continues`,
       );
     }
 
@@ -218,6 +236,14 @@ export async function runDailyRollup(env: Env): Promise<void> {
       console.log(
         `daily prune: downgraded ${archivePrune.downgraded}/${archivePrune.checked} ` +
           `archive object(s) to quick_status-only`,
+      );
+    }
+
+    const archiveExpiry = await pruneArchiveExpired(env, startedAt);
+    if (archiveExpiry.deleted > 0) {
+      console.log(
+        `daily prune: deleted ${archiveExpiry.deleted} expired archive object(s) ` +
+          `across ${archiveExpiry.datesRemoved} date(s)`,
       );
     }
 
@@ -235,7 +261,7 @@ export async function runDailyRollup(env: Env): Promise<void> {
     await recordRun(env, "prune", startedAt, Date.now() - t0, {
       productsSeen: byTag.size,
       rowsWritten: dailyRows.length,
-      rowsDeleted: snapshotPrune.deleted + hourlyPrune.deleted,
+      rowsDeleted: snapshotPrune.deleted + hourlyPrune.deleted + dailyPrune.deleted,
       dbSizeBytes,
     });
   } catch (e) {

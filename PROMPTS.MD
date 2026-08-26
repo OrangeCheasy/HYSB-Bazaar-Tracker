@@ -4,9 +4,8 @@ Copy-paste prompts for Claude Code, one per phase. `CLAUDE.md` loads automatical
 these deliberately do **not** repeat the architecture — restating it wastes context and
 invites contradictions between two sources of truth.
 
-Prompts for phases 0, 0.5, 1, 2 and 4 have been deleted — that work is built and its
-tests pass. What remains below is what has not been built. Phase 4's *deployment* is
-still outstanding even though its code is done; that is tracked in `TODO.md`, not here.
+Prompts for phases 0, 0.5, 1, 2 and 4 have been deleted — that work is built, deployed and
+verified in production. What remains below is what has not been built.
 
 ## How to run these well
 
@@ -26,15 +25,18 @@ still outstanding even though its code is done; that is tracked in `TODO.md`, no
 
 ## Phase 3 — Backfill
 
-**Deliberately deferred, not forgotten** (2026-08-25). Coflnet's history is their
-archive — it will still be there next month, whereas every hour our own cron is not
-running is history we cannot recover. So ingestion went to production first and this
-waits. `scripts/backfill.ts` is still the 38-line stub that prints "not implemented".
+**Deliberately deferred, not forgotten** (2026-08-25). **Re-scoped by the 30-day retention
+cap** (2026-08-26): backfilling past 30 days is now pointless, because the nightly prune
+deletes it. The job is bounded at exactly one month.
 
-Do this before Phase 5 ships hour-of-day charts to real users, or sooner if the scope
-check in ROADMAP Phase 3 says our own `hourly` coverage still cannot support a profile.
-Deferring costs nothing structurally: `hourly.source` already exists and defaults to
-`'hypixel'`, so coflnet rows drop in later with no migration.
+What it is now for: reaching a **full 30-day window immediately** rather than waiting a
+month for one to accumulate. The weekly band needs 7 days to exist and 4 weeks before its
+hit-rate means anything, so this is the difference between shipping bands now and shipping
+them in late September.
+
+`scripts/backfill.ts` is still the 38-line stub that prints "not implemented". Deferring
+costs nothing structurally: `hourly.source` already exists and defaults to `'hypixel'`, so
+coflnet rows drop in later with no migration.
 
 ```
 Build scripts/backfill.ts per docs/ROADMAP.md Phase 3.
@@ -47,6 +49,11 @@ row but Coflnet does.
 Local Node script only — this must never be importable from the Worker.
 It reads recipe tags from D1, pulls SkyCofl history for each, and writes
 into hourly with source='coflnet'.
+
+Never request a range older than 30 days. Our retention cap prunes it on
+the next nightly run, so fetching it only spends someone else's rate limit
+for data we immediately delete. Cap --days at 30 and reject higher values
+with a message saying why.
 
 Requirements:
 - Minimum 1.05s between requests, honoring Retry-After on 429. SkyCofl
@@ -67,6 +74,86 @@ minute run and I want to know that before it starts.
 
 ---
 
+## Phase 4.5 — Weekly bands and anvil merges
+
+Three sessions, in this order. Part A is a hard dependency of both others — don't reorder.
+
+Session A — the conversion graph:
+```
+Build packages/core/src/convert.ts per docs/ROADMAP.md Phase 4.5 Part A.
+
+A recipe becomes an edge in a graph and the question becomes "cheapest path
+to one unit of the output". Generic over edges — do NOT special-case anvils
+or compaction. Three callers depend on it: anvil level chains, tier-2
+compaction, and whatever we add later.
+
+Pure core module, no I/O, no platform imports.
+
+Prove it on the bug it exists to fix: SUGAR_CANE -> ENCHANTED_SUGAR_CANE is
+currently seeded as a single 160:1 recipe and reports a ~3,000% margin in
+production. The real path goes through ENCHANTED_SUGAR. Write a test that
+prices both the one-step and two-step interpretations and asserts the
+solver picks the cheaper real path.
+
+Before writing code, show me the type signature you're proposing for an
+edge and for the solver result. I want to check it can express a 2^k anvil
+chain and a 160:1 compaction step without a discriminated union at every
+call site.
+```
+
+Session B — anvil merges:
+```
+Build packages/core/src/anvil.ts and the recipes migration per
+docs/ROADMAP.md Phase 4.5 Part B. Read CLAUDE.md section 8's anvil
+subsection first — the domain rules are there.
+
+Key facts you must not re-derive incorrectly:
+- Two books of the same enchant at level N make one at level N+1, so going
+  from L to M costs 2^(M-L) books. Sharpness 1 -> 7 is 64 books, not 6.
+- Every intermediate level is itself tradeable, so entering at level 3 is
+  often cheaper than at level 1. Use the Part A solver to pick.
+- Derive each family's level range from the live product list. No hardcoded
+  enchant map — new enchants must work without a code change.
+- Anvil coin/XP cost is UNVERIFIED. Model it as an input defaulting to
+  zero, not a hardcoded constant, and flag it in the output.
+
+The migration adds a `kind` discriminator to recipes ('compact' | 'anvil').
+Forward-only, numbered. Seed every anvil recipe with verified = 0.
+
+Tell me before you start how many recipe rows this seeds and what that does
+to the scan's row count.
+```
+
+Session C — weekly bands:
+```
+Build packages/core/src/bands.ts and the band endpoints per
+docs/ROADMAP.md Phase 4.5 Part C. Read CLAUDE.md section 8's weekly band
+subsection first.
+
+Write the sides test BEFORE the implementation. A buy order competes at bid
+and a sell offer competes at ask (CLAUDE.md section 1). Building the low
+band from the ask side inverts the entire strategy and produces orders that
+never fill — that is the most likely bug in this work and I want a test
+that fails loudly if anyone ever flips it.
+
+Use percentiles, not MIN/MAX: p10 of hourly bid_avg for the buy band, p90
+of hourly ask_avg for the sell band, both user-adjustable. A single 5-minute
+wick is not a price anyone can transact at.
+
+Every band ships with its hit-rate — how many hours in the window actually
+touched it, and how often both sides were touched in the same week. A band
+without a hit-rate is not shippable. Also return the week count: the 30-day
+cap means it is at most 4, and any multi-week claim has to show that n.
+
+hourly already has bid_min/bid_avg/bid_max and ask_min/ask_avg/ask_max, so
+this needs no schema change. Confirm that before assuming a migration.
+```
+
+**Checkpoint per session:** `npm test` and `npm run typecheck` both clean, and for
+session C, the inverted-sides test genuinely fails when you flip the band derivation.
+
+---
+
 ## Phase 5 — Frontend
 
 Split this across sessions — one view per session. Don't ask for the whole SPA at once;
@@ -76,10 +163,10 @@ sitting is how bugs get merged.
 Session 5a — shell:
 ```
 Set up the Vite + React + TS + Tailwind app in web/ with routing, the
-settings drawer (tax, capture, sleep window, timezone — persisted to
-localStorage), a typed API client, and the layout shell including the footer
-with the SkyCofl attribution link and the not-affiliated-with-Hypixel
-disclaimer required by CLAUDE.md section 7.
+settings drawer (tax, capture, band percentiles, sleep window, timezone —
+persisted to localStorage), a typed API client, and the layout shell
+including the footer with the SkyCofl attribution link and the
+not-affiliated-with-Hypixel disclaimer required by CLAUDE.md section 7.
 
 Before building: propose a visual direction in a sentence or two. This is a
 data-dense trading tool, so I want dense tables that stay readable, not a
@@ -89,26 +176,55 @@ No views yet — just the shell, routing, and a data-age indicator in the
 header.
 ```
 
-Session 5b — scan table:
+Session 5b — band table (the landing view):
 ```
-Build the scan table view. Sortable, ranked by profit/day by default,
+Build the band table view and make it the landing route. Per tag: buy band,
+sell band, spread after tax, and the hit-rate for each side. Sortable,
 filterable by available capital.
+
+This is the view someone opens before setting up orders for the evening, so
+optimise for scanning a lot of rows quickly, not for explaining one row.
+
+Non-negotiable from CLAUDE.md: a band never renders without its hit-rate
+adjacent. Not in a tooltip — adjacent. A band nobody's order ever touches
+is not a trade, and the hit-rate is the only thing on the row that says so.
+
+Anything resting on fewer than 4 weeks of data shows the week count inline.
+
+Handle loading and empty states properly, and make it work at 375px wide.
+Show me how you're handling the mobile table layout before you build it —
+horizontally scrolling tables are usually the wrong answer.
+```
+
+Session 5c — scan table:
+```
+Build the craft scan table view. Sortable, ranked by profit/day by default,
+filterable by available capital. Craft type (compaction vs anvil) is a
+visible column.
 
 Two rules from CLAUDE.md that are non-negotiable in the UI:
 - A margin number never renders without its fill-feasibility number
   adjacent. Not in a tooltip — adjacent.
-- Unverified recipes are visually marked.
+- Unverified recipes are visually marked. Every anvil recipe ships
+  unverified, so this marking is load-bearing on launch, not a rare case.
 
-Handle the loading and empty states properly, and make it work at 375px
-wide. Show me how you're handling the mobile table layout before you build
-it — horizontally scrolling tables are usually the wrong answer.
+Reuse the table primitives from the band view rather than building a second
+table implementation.
 ```
 
-Session 5c — craft detail + charts:
+Session 5d — detail views + charts:
 ```
-Build the craft detail view: three scenarios side by side, a price chart
-with the buy and sell windows shaded, an hour-of-day bar chart, and plain-
-language explanations of any warning flags.
+Build the band detail and craft detail views.
+
+Band detail: the price chart over the trailing window with both bands drawn
+as horizontal lines, so "how often did price actually touch this" is
+answered visually instead of asserted. State the week count plainly.
+
+Craft detail: three scenarios side by side, a price chart with the buy and
+sell windows shaded, an hour-of-day bar chart, and plain-language
+explanations of any warning flags. For anvil merges, show the chosen entry
+level and what the alternatives would have cost — the entry-level choice is
+the whole point of the solver and it should be visible, not implicit.
 
 Put the chart behind a single <PriceChart> component with our own props, so
 the charting library is swappable in one file. Use Recharts for now.

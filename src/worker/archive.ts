@@ -12,6 +12,24 @@ import type { Env } from "./index.js";
 
 const FULL_RETENTION_DAYS = 14;
 
+/**
+ * Hard retention for the archive (CLAUDE.md section 3, ADR-021). Downgrading at 14 days
+ * only slows growth — 26MB/day instead of 136MB/day — it does not stop it. This delete is
+ * what makes the archive flat at ~2.3GB and keeps it permanently inside R2's free tier.
+ * ADR-021 flags this as the clause a future "storage is cheap, let's keep it" instinct
+ * will attack first; storage being cheap was never the argument.
+ */
+const ARCHIVE_RETENTION_DAYS = 30;
+
+/**
+ * Bound on how many expired dates one run will clear. Unlike pruneArchiveDetail, which
+ * targets exactly one date and tolerates a missed run, expired objects that linger are
+ * unbounded growth — the precise failure this delete exists to prevent — so this catches
+ * up on a backlog instead of only handling today's boundary. The cap keeps a long outage
+ * from turning the first recovery run into an unbounded job; the next run continues.
+ */
+const MAX_EXPIRED_DATES_PER_RUN = 10;
+
 // A quick_status-only tick is roughly 10-20% of a full tick's gzipped size (measured
 // 19.3% in the Phase 0.5 spike). Threshold sits well above that so pruneArchiveDetail
 // treats an already-downgraded object as a no-op by size alone, with no extra
@@ -105,4 +123,68 @@ export async function pruneArchiveDetail(
   } while (cursor);
 
   return { checked, downgraded };
+}
+
+export interface ArchiveExpiryResult {
+  readonly datesRemoved: number;
+  readonly deleted: number;
+  readonly moreRemaining: boolean;
+}
+
+/**
+ * Delete archive objects past ARCHIVE_RETENTION_DAYS. Called once daily from
+ * runDailyRollup, after pruneArchiveDetail.
+ *
+ * Enumerates date "folders" with a delimited list rather than walking every object:
+ * `list({ prefix: 'archive/', delimiter: '/' })` returns ~30-40 delimitedPrefixes for a
+ * steady-state bucket, so deciding what expired costs one cheap call instead of paging
+ * through ~9,000 keys. Only the dates that actually expired get their objects listed.
+ *
+ * Deletes are batched — R2's delete() takes up to 1000 keys per call, and one date holds
+ * 288 ticks, so a date is normally a single operation.
+ */
+export async function pruneArchiveExpired(
+  env: Env,
+  nowTs: number,
+): Promise<ArchiveExpiryResult> {
+  const cutoffDate = dateKey(nowTs - ARCHIVE_RETENTION_DAYS * 86_400);
+
+  const expired: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await env.ARCHIVE.list({ prefix: "archive/", delimiter: "/", cursor });
+    for (const prefix of page.delimitedPrefixes) {
+      // "archive/YYYY-MM-DD/" — lexicographic compare is a date compare for ISO dates.
+      const date = prefix.slice("archive/".length).replace(/\/$/, "");
+      if (date < cutoffDate) expired.push(prefix);
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  expired.sort(); // oldest first, so a capped run always clears the worst offenders
+  const targets = expired.slice(0, MAX_EXPIRED_DATES_PER_RUN);
+
+  let deleted = 0;
+  for (const prefix of targets) {
+    // Re-list from the start each round rather than carrying a cursor. We are deleting
+    // exactly what we just listed, so the next listing returns the next batch and the
+    // loop terminates when it comes back empty. Advancing a cursor while deleting
+    // underneath it skips keys — the window shifts by however many rows were removed —
+    // which leaves objects behind permanently, since nothing revisits an expired date
+    // once it drops out of the delimited listing.
+    for (;;) {
+      const page = await env.ARCHIVE.list({ prefix });
+      const keys = page.objects.map((o) => o.key);
+      if (keys.length === 0) break;
+      await env.ARCHIVE.delete(keys);
+      deleted += keys.length;
+      if (!page.truncated) break;
+    }
+  }
+
+  return {
+    datesRemoved: targets.length,
+    deleted,
+    moreRemaining: expired.length > targets.length,
+  };
 }

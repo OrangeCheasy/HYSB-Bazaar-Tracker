@@ -1,7 +1,9 @@
 # CLAUDE.md — bazaar.liamthemo.com
 
-Bazaar craft analytics for Hypixel SkyBlock. Tracks base→enchanted craft margins,
-diurnal price patterns, and volume-adjusted profitability. Public read-only site.
+Bazaar analytics for Hypixel SkyBlock. Three things: **trailing weekly high/low bands**
+for placing buy orders at the low and sell offers at the high, **base→enchanted craft
+margins**, and **anvil book merges**. All volume-adjusted, all with fill feasibility
+attached. Public read-only site, rolling 30-day data window.
 
 > Keep this file under ~400 lines. It loads into every session, so it holds **durable
 > rules and invariants only**. Phase plans live in `docs/ROADMAP.md`. Anything that
@@ -57,39 +59,59 @@ orangecheasy.net
 
 ```
 Hypixel /v2/skyblock/bazaar  ── cron */5 ──▶ tier split ──▶ snapshots (D1, Tier A only)
-   ONE request, ALL ~1500 products,                │                    │
+   ONE request, ALL 2,136 products,                │                    │
    no API key required                             │                    ├─ :07  hourly rollup
    response is several MB — you cannot             │                    ├─ 04:23 daily + prune
    ask for a subset                                │                    └─ :07  precompute → KV
                                                    │                              │
                                                    └──▶ R2 raw archive            ▼
-                                                        (see §3 sizing)   /api/* reads KV or D1
+                                                        (30d, see §3)     /api/* reads KV or D1
 
 SkyCofl /api/bazaar/{tag}/history ── manual, once ──▶ hour-of-day seed only
-   local script, NEVER from the Worker
+   local script, NEVER from the Worker           (≤30d — anything older is pruned anyway)
 ```
+
+Everything above prunes at 30 days (§3). The 04:23 job is the only thing standing between
+this design and unbounded growth; if it silently stops, nothing else notices.
 
 ### Tiered coverage — the decision that keeps this inside the limits
 
-We do **not** store five-minute rows for all 1500 products. Coverage, not retention, is
-the lever that controls growth.
+We do **not** store five-minute rows for all 2,136 products. Coverage is the lever that
+controls write volume; **retention is capped at 30 days everywhere** (§3), so nothing in
+this system grows without bound.
 
-| Tier | Which tags | Storage | Growth |
-|---|---|---|---|
-| **A** | recipe tags, **plus** any tag in the top ~500 by `sellMovingWeek` | 5-min `snapshots` pruned at 7d, `hourly` forever | ~350 MB/year |
-| **B** | everything else | `hourly` only, no snapshots, pruned to 90d then `daily` | bounded |
+| Tier | Which tags | Storage |
+|---|---|---|
+| **A** | recipe tags, **plus** any tag in the top ~500 by `sellMovingWeek`, **plus** the lowest- and highest-level book of every enchant family | 5-min `snapshots` pruned at 7d, `hourly` at 30d |
+| **B** | everything else | `hourly` only, no snapshots, 30d |
 
 Tier A membership is **recomputed each run**, not a static list. A tag that starts trading
 gets promoted automatically; a dead one falls out. Promotion must never require a
-migration.
+migration. Current size: ~784 tags (501 pre-books + 283 book level-endpoints).
 
-On Workers Paid this is a choice, not a constraint — full 5-minute coverage of all 1500
-products would be ~26M rows/month written against the 50M included, and ~2 GB/year in
-`hourly` against a 10 GB cap. It fits. We tier anyway because five-minute resolution on an
-item nobody trades has no analytical value and consumes the headroom we'd want for
-backfills, reprocessing, and schema migrations. Keep roughly half the write budget free.
+**Why book level-endpoints get in regardless of volume.** Anvil merging (§8) consumes
+level-1 books and produces max-level books; those two rungs are the only ones a merge
+strategy actually trades. Measured against a live hour, of 774 book tags:
 
-The reason we still fetch all 1500 products: Hypixel returns them in one response and
+| Level position | Tags | % unit volume | % coin turnover | Avg price |
+|---|---|---|---|---|
+| Lowest | 143 | 72.3% | 70.1% | 2.8M |
+| **Max** | 143 | 4.6% | **21.0%** | 20.0M |
+| Intermediate | 476 | 22.9% | 7.9% | 2.0M |
+
+Level-1 + max is **91% of book coin turnover in 286 of 774 tags**. Rank books by unit
+volume and you will wrongly drop the max-level rung — it is 4.6% of units but 21% of
+coins, because those books average 20M each. The plain top-500-by-volume rule put only
+**3** books in Tier A, which is why the level-endpoint rule exists as a separate clause.
+Intermediate levels stay Tier B unless they earn a slot on volume like anything else.
+
+On Workers Paid this is a choice, not a constraint — full 5-minute coverage of all 2,136
+products is ~18.5M rows/month written against the 50M included, and with a 30-day cap it
+now fits on storage too. We tier anyway because five-minute resolution on an item nobody
+trades has no analytical value, and 43% of book tags have *zero* weekly volume. Keep
+roughly half the write budget free for backfills, reprocessing, and schema migrations.
+
+The reason we still fetch all 2,136 products: Hypixel returns them in one response and
 offers no way to request a subset. Tiering happens after parsing, on our side.
 
 **Rule: user requests never touch an upstream API.** Not once, not "just for the detail
@@ -126,48 +148,54 @@ Verified against Cloudflare docs; re-check before assuming.
 - **D1 query count per invocation** — 1000. Still never loop `INSERT` per product: bound
   parameters cap at **100 per query** regardless of plan, so chunk by parameter count,
   not row count, and use `db.batch()`.
+- **Nothing is kept longer than 30 days.** This is a product decision, not a storage
+  workaround: the site exists to compute a *trailing* weekly high/low band (§8), and a
+  price from six weeks ago is not evidence about next week's band. Every table and the R2
+  archive prune to 30 days, so the whole system reaches a steady state and stays there.
+  The direct consequences, which you must not quietly undo:
+  - **A gap older than 30 days is gone forever**, ours and anyone's. §3b's monitoring is
+    what protects the window; there is no longer a deep archive to reprocess from.
+  - **Phase 8 publishes a rolling 30-day window**, not an accumulating dataset.
+  - **Backfill beyond 30 days is pointless** — the next prune deletes it (ROADMAP Phase 3).
 - **D1 storage** — 10 GB max per database on paid, 500 MB on free; 1 TB per account.
-  Retention policy is not optional. Figures below are measured from a live payload, not
-  estimated (see the Phase 0.5 checkpoint in `docs/ROADMAP.md`):
-  - The bazaar currently returns **2,136 products**, not ~1500 — the catalog has grown
-    since that figure was written. Treat "~1500" elsewhere in this doc as stale by ~40%.
-  - `snapshots` (5-min, Tier A, 150 recipe tags): prune to **7 days** ≈ **44 MB** steady
-    state (measured ~154 bytes/row, 43.2k rows/day). The 80 MB estimate was ~1.8x high.
-  - `hourly`: keep indefinitely. Tier A (150 recipe tags) ≈ **231 MB/year** measured
-    (~184 bytes/row, 3.6k rows/day) — this is the table that grows forever, so it is the
-    one to watch. The 350 MB/year estimate was ~1.5x high.
-  - `daily`: keep indefinitely, serves anything older than 90 days
-  - Untiered (all 2,136 products at 5-min) would be **32.2 GB/year** in `snapshots` and
-    **3.2 GB/year** in `hourly` alone. That is the plan we rejected; do not drift back
-    into it by "temporarily" widening coverage. (The old ~2 GB/year untiered-hourly
-    estimate was low mainly because it assumed ~1500 products, not 2,136.)
+  Figures are measured from a live payload, not estimated (see the Phase 0.5 checkpoint in
+  `docs/ROADMAP.md`), and are **steady state, not annual growth**:
+  - `snapshots` (5-min, Tier A, ~784 tags): prune to **7 days** ≈ **243 MB** steady state
+    (measured ~154 bytes/row, 226k rows/day). Larger than the old 44 MB figure because
+    Tier A grew from 150 recipe tags to 784 with book level-endpoints included.
+  - `hourly` (all 2,136 products): prune to **30 days** ≈ **283 MB** steady state
+    (measured ~184 bytes/row, 51.3k rows/day). Previously "keep indefinitely" at
+    231 MB/year — the cap converts an unbounded liability into a fixed cost.
+  - `daily` (all products): prune to **30 days** ≈ **12 MB**. Its old job — serving
+    anything older than 90 days — no longer exists. It survives because it is the cheap
+    table to compute multi-week band hit-rates from (§8).
+  - **Total ≈ 538 MB and flat**, about 5% of the 10 GB cap, with ~16.8M rows/month written
+    including deletes against the 50M included (~34%).
+  - Untiered 5-min coverage of all 2,136 products would be 617 MB at 7-day retention —
+    which now *fits*. The storage argument for tiering has evaporated; the write-budget
+    and signal-quality arguments in §2 are what remain.
 - **Deletes count as rows written.** Pruning is not free — budget deletes alongside
   inserts when checking against the 50M/month included.
 - **R2 raw archive sizing** — the full response including `buy_summary`/`sell_summary` is
-  3.45 MB raw, **481 KB gzipped** (measured, 7.3x compression). Across a full day's 288
-  cron ticks that's **~135 MB/day gzipped**, which exhausts R2's 10 GB free allowance in
-  **~76 days (~11 weeks)**, not five — the original estimate was ~2.2x too pessimistic.
-  Still keeps growing, so the mitigations stand:
-  - **One small object per tick** (`archive/{YYYY-MM-DD}/{HHmm}.json.gz`), **not** one
-    bundled object per day as this section previously said — see ADR-016. Bundling
-    collides with two hard platform limits: R2 multipart uploads need a 5MB minimum part
-    size (one tick's ~481KB gzipped payload is 10x too small to be its own part), and
-    Workers isolates cap at 128MB memory, unsafe for holding a growing ~136MB/day blob to
-    decompress/re-upload every 5 minutes. At 288 writes/day, per-tick objects cost ~0.9%
-    of R2's 1,000,000/month free Class A operation allowance — the "operation counts
-    matter" concern that originally motivated daily bundling isn't actually binding at
-    this volume.
+  3.45 MB raw, **481 KB gzipped** (measured, 7.3x compression; re-verified 2026-08-25
+  against a live object at 3.44 MB / 485 KB / 7.3x). Across a full day's 288 cron ticks
+  that's **~136 MB/day gzipped**. Unbounded, that exhausted R2's 10 GB free allowance in
+  ~75 days. **With the 30-day cap it reaches ~2.3 GB and stops** — 14 days of full order
+  books (1.9 GB) plus 16 days of `quick_status`-only (0.4 GB) — so the archive now lives
+  permanently inside the free tier. The mitigations below are what keep it there:
+  - **One small object per tick** (`archive/{YYYY-MM-DD}/{HHmm}.json.gz`), never a bundled
+    daily object — bundling collides with R2's 5MB minimum multipart part size and the
+    128MB isolate memory cap. See ADR-016 for the full reasoning.
   - Keep full order books for **14 days**; a daily job downgrades one day's ticks to
     `quick_status`-only once they cross that age (`src/worker/archive.ts`,
     `pruneArchiveDetail`), rather than deciding full-vs-reduced at write time
-  - Beyond 14 days, archive `quick_status` only — **measured at 19.3% of the full gzipped
-    size** (~26 MB/day, ~9.3 GB/year), not the ~10% originally assumed, but still enough
-    to recompute every derived table
-  - The literal "one object per day" artifact, if wanted for public dataset dumps, is an
-    offline consolidation step at Phase 8 time (already gated behind 30 clean days),
-    built against real R2 data instead of guessed batching logic today
-- **Order books are never stored raw in D1.** 1500 products × ~60 levels = 90k rows per
-  snapshot; at 5-minute intervals that is 26M rows/day and D1 will not tolerate it.
+  - Between 14 and 30 days, `quick_status` only — **measured at 19.3% of full gzipped
+    size** (~26 MB/day), still enough to recompute every derived table
+  - **Beyond 30 days, delete.** The same daily job that downgrades day 15 deletes day 31.
+    This is what makes the archive flat rather than merely slow-growing, and it is the
+    clause a future "let's just keep it, storage is cheap" instinct will attack first
+- **Order books are never stored raw in D1.** 2,136 products × ~60 levels = 128k rows per
+  snapshot; at 5-minute intervals that is 37M rows/day and D1 will not tolerate it.
   Compute depth metrics at ingest — depth within 1% and 5% of top of book, largest single
   wall, order count — store those few numbers, send the raw summaries to R2.
 - **D1 primary location is effectively permanent.** Set it deliberately at creation with
@@ -203,9 +231,18 @@ Three mechanisms, all built in Phase 2 rather than bolted on later:
    samples instead of 12 is visibly less trustworthy, and the API must surface that rather
    than averaging it away silently.
 
-Corollary: **start ingesting as early as possible.** Every day of delay is a day of
-history you cannot recover. Deploy the cron standalone the moment Phase 2 works — before
-the API exists, before there is any frontend.
+**The 30-day cap makes gaps worse, not better.** It is tempting to read "we only keep a
+month" as "gaps matter less." The opposite is true: against an unbounded archive a
+three-day outage is a rounding error, but against a 30-day window it is **10% of
+everything the site knows**, and the weekly band (§8) is computed from a 7-day slice where
+three missing days is 43% of the input. Retention shrank; the monitoring requirement did
+not. Alert thresholds stay where they are.
+
+Corollary: **start ingesting as early as possible.** Deploy the cron standalone the moment
+Phase 2 works — before the API exists, before there is any frontend. The 30-day cap means
+this is now a one-month runway to full fidelity rather than a permanent loss, but a site
+whose bands are computed from four days of data is still a site that should not be
+publishing bands.
 
 ---
 
@@ -218,6 +255,9 @@ packages/core/          Pure TS domain logic. ZERO platform imports.
   src/profile.ts          hour-of-day profiling, best-window search
   src/economics.ts        craft profit model, throughput caps
   src/recipes.ts          recipe types + validation
+  src/convert.ts          conversion graph: cheapest path through multi-step recipes
+  src/anvil.ts            enchant families, level chains, 2^k merge ratios
+  src/bands.ts            trailing weekly high/low bands + hit-rate
   test/                   vitest, this is where coverage actually matters
 src/worker/
   index.ts                fetch + scheduled entry, routes by event.cron
@@ -254,7 +294,18 @@ function needs data, it takes it as an argument.
 - Errors: return typed results (`{ ok: true, value } | { ok: false, error }`) in core;
   throw only at boundaries.
 - SQL lives in `src/worker/db/`, never inline in route handlers.
-- Migrations are forward-only and numbered. Never edit an applied migration.
+- Migrations are forward-only and numbered. **Never edit an applied migration** — doing so
+  to `0001` is what caused the drift that `0004`/`0005` had to repair, and then made the
+  whole chain unreplayable. Fix mistakes with a new numbered file.
+  - **A fresh database must be able to replay the entire chain.** This is the property the
+    rule protects and the one worth testing, because nothing else notices when it breaks:
+    `wrangler d1 migrations apply bazaar --local --persist-to <tmpdir>` builds one from
+    scratch. Do this after adding a migration.
+  - **Never create an index or column directly against production.** Production carried two
+    indexes that appeared in no migration until `0007` reconciled them; untracked drift in
+    that direction is the same failure as editing a migration, just harder to see.
+  - One deliberate exception exists (ADR-024: `0004`/`0005` emptied). Not a precedent — the
+    bar was "provably dead *and* breaks every new database", not "inconvenient".
 
 ## 6. Commands
 
@@ -295,7 +346,10 @@ any projection in this file.
 5. **No user accounts in v1.** Watchlists go in `localStorage`. Adding auth means handling
    PII, and that is a different project with different obligations.
 6. **The site gives estimates, not advice.** Every profit figure ships next to its
-   fill-feasibility caveat. Do not build UI that shows a margin number alone.
+   fill-feasibility caveat. Do not build UI that shows a margin number alone. For the
+   weekly band (§8) the required companion number is the **hit-rate** — how often price
+   actually reached that band — because a band nobody's order ever touches is not a
+   trade, it is a chart annotation.
 
 ## 8. Domain gotchas worth remembering
 
@@ -313,3 +367,58 @@ any projection in this file.
   profit-per-day, never by margin.
 - Collection-level gating means a profitable craft may be unavailable to a given player.
   Surface the requirement where known; do not pretend it doesn't exist.
+
+### Anvil book merging — the second craft type
+
+Two enchanted books of the **same enchant at the same level** combine in an anvil into one
+book of the next level up. Reaching level `M` from level `L` therefore takes `2^(M-L)`
+books — Sharpness 1 → 7 is 2⁶ = **64** level-1 books, not 6. Tags are
+`ENCHANTMENT_{ENCHANT}_{LEVEL}` (`ENCHANTMENT_SHARPNESS_1`, `ENCHANTMENT_ULTIMATE_WISE_5`).
+
+What makes this genuinely different from 160:1 compaction, and why it is not just another
+`recipes` row:
+
+- **The ratio is a power of two, not a constant**, and every rung in between is itself a
+  tradeable bazaar item. You may enter the chain at *any* level, so the model must pick
+  the cheapest entry: `min over L < M of (2^(M-L) × price(L))`. Buying 16 level-3 books is
+  frequently cheaper than 64 level-1 books. A single flat `ratio` column cannot express
+  this — the search over entry levels is the feature.
+- **This is the same machinery tier-2 compaction needs.** `SUGAR_CANE → ENCHANTED_SUGAR →
+  ENCHANTED_SUGAR_CANE` is a two-step path priced exactly the same way. Build one
+  cheapest-path solver in `convert.ts` and both craft types use it; building anvil logic
+  separately means fixing the same bug twice.
+- **Fill feasibility dominates here.** Max-level books are 21% of book coin turnover but
+  only 4.6% of unit volume — you are selling few, expensive items. `hoursToFillOneCraft`
+  is the headline constraint, not a footnote, and capital-per-craft runs to tens of
+  millions against a few thousand for enchanted materials.
+- **Not every level is reachable by merging.** Some enchants cap below their bazaar-listed
+  maximum, or have levels obtainable only from specific drops. Ratios still cannot be
+  validated automatically (the rule at the top of this section applies with more force,
+  not less) — every anvil recipe carries `verified` and starts at `false`.
+- Anvil coin/XP cost is **unverified**; treat it as an input to confirm, not a constant to
+  hardcode. If it turns out non-zero it enters the cost side per merge, meaning `2^(M-L)-1`
+  merges, not one.
+
+### The weekly band — what the site is actually for
+
+Place a **buy order** at the trailing weekly low, a **sell offer** at the trailing weekly
+high, and collect the difference. Per §1 this is a bid→ask strategy, so it inherits that
+section's caveat in full: it is the realistic case **conditional on both orders filling**.
+
+- Sides follow §1 with no exceptions. A buy order competes at **`bid`**, so the low band
+  is computed from the bid side; a sell offer competes at **`ask`**, so the high band comes
+  from the ask side. Building the band from `ask_min`/`bid_max` inverts the strategy and
+  produces orders that never fill.
+- **Use percentiles, not `MIN`/`MAX`.** A single five-minute wick is not a price you can
+  actually transact at. Default to p10 of hourly `bid_avg` for the buy band and p90 of
+  hourly `ask_avg` for the sell band, computed over the trailing 7 days (168 hourly rows —
+  a healthy sample). Make the percentile a user input, not a constant.
+- **Always ship the hit-rate.** By construction a p10 buy order sits unfilled ~90% of the
+  time. The band is only a trade if price actually visits it, so report how many hours in
+  the window touched each band, and how often *both* were touched in the same week.
+  Non-negotiable #6 covers this.
+- **Beware small n on the weekly view.** The band itself rests on 168 hourly rows, but
+  "how many weeks did this hold" rests on **4** — the 30-day cap allows no more. Report the
+  week count next to any multi-week claim rather than implying a long track record.
+- This works on plain materials with no crafting at all, which is often the better trade:
+  no collection gating, no recipe-ratio risk, and `verified` never enters the picture.

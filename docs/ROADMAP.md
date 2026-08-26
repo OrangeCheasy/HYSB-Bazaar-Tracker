@@ -84,14 +84,19 @@ reusable-systems discipline that makes a multi-project studio work.
 ---
 
 ## Phase 2 — Data layer and ingestion
-**Status: deployed and ingesting; Done-when not yet met.** Remote D1 migrated, R2
-bucket created, cron live. Ingest and rollup have run clean since the 2026-08-25 18:10
-deploy, and `archive/2026-08-25/*.json.gz` objects are real. The 48-hour zero-error
-window has **not** started: `precompute` still errors every hour (production runs `main`,
-which predates Phase 4), and since that same deploy every cron fires twice ~54s apart.
-Both are tracked in `TODO.md`.
+**Status: deployed and ingesting; 48-hour clock started 2026-08-26 ~03:00 UTC.** Remote D1
+migrated, R2 bucket holding real per-tick objects, cron live and steady at 12 ingests/hour.
+As of version `795c2c5d`, **all four run kinds report `ok=true, error=null`** — the
+`precompute` and double-cron problems that blocked the clock are both resolved, and
+`prune` has recorded its first clean production run.
 
-**Goal:** the cron fills D1 with real bazaar history, forever, without falling over.
+Two Done-when clauses remain open, both on the calendar rather than on anyone's desk:
+48 unattended error-free hours (earliest close **2026-08-28 03:00 UTC**) and "pruning has
+actually deleted something", which cannot happen until `snapshots` crosses 7 days on
+**~2026-09-01**. Today's prune deleted 0 rows correctly — nothing was past retention.
+
+**Goal:** the cron keeps D1 filled with a rolling 30 days of real bazaar history, running
+indefinitely without falling over.
 **Effort:** 2–3 evenings
 
 **Deploy this standalone the moment it works** — before the API, before any frontend.
@@ -101,16 +106,19 @@ Coflnet would give you for the same window.
 
 Deliverables:
 - Migrations for `products`, `recipes`, `snapshots`, `hourly`, `daily`, `runs`
-- Tier assignment: a tag is Tier A if referenced by a recipe **or** in the top ~500 by
-  `sellMovingWeek`, else Tier B (CLAUDE.md §2). This line previously said recipe tags
-  only, which is narrower than what was built — production carries 501 Tier A tags.
-  Config-driven, re-evaluated each run, never a migration
+- Tier assignment: a tag is Tier A if referenced by a recipe, **or** in the top ~500 by
+  `sellMovingWeek`, **or** the lowest- or highest-level book of an enchant family
+  (CLAUDE.md §2). Production carried 501 Tier A tags before the book clause; with it,
+  ~784. Config-driven, re-evaluated each run, never a migration
 - `ingest.ts`: one fetch, normalize via `packages/core`, tier split, chunked multi-row
   insert. Tier A → `snapshots`; Tier B → `hourly` directly
 - Order book depth metrics computed at ingest (depth within 1% and 5% of top of book,
   largest wall, order count). Raw summaries go to R2, never to D1
-- R2 archive: one object per day, full order books 14 days, `quick_status` only beyond
-- `rollup.ts`: hourly, daily, retention pruning per tier
+- R2 archive: one object per tick, full order books 14 days, `quick_status` to 30 days,
+  **deleted beyond 30** — the delete is what keeps the archive flat at ~2.3 GB
+- `rollup.ts`: hourly, daily, and **30-day retention pruning on every table**. Nothing in
+  this system is kept longer than a month (CLAUDE.md §3); `hourly` and `daily` were
+  previously "keep indefinitely" and are not any more
 - `event.cron` branching in `scheduled`
 - Nightly `wrangler d1 info`-equivalent size check recorded into `runs`
  
@@ -131,13 +139,22 @@ broken the ingest and confirmed `runs` recorded the failure.
 ---
 
 ## Phase 3 — Historical backfill
-**Status: deferred by decision, 2026-08-25.** Not skipped for lack of time — deferring is
-free and delaying Phase 2 is not. Coflnet's history stays available; our own five-minute
-history exists only if the cron was running at the time. So production ingestion went
-first. `scripts/backfill.ts` is still a stub. Revisit before Phase 5 puts hour-of-day
-charts in front of users. See ADR in `docs/DECISIONS.md`.
+**Status: deferred by decision, 2026-08-25. Re-scoped 2026-08-26 by the 30-day cap.** Not
+skipped for lack of time — deferring is free and delaying Phase 2 is not. Coflnet's
+history stays available; our own five-minute history exists only if the cron was running
+at the time. So production ingestion went first. `scripts/backfill.ts` is still a stub.
+See ADR in `docs/DECISIONS.md`.
 
-**Goal:** seed enough history for hour-of-day profiling. That is all it is for now.
+**The 30-day cap changed what this phase is for, and bounded it.** Backfilling further
+than 30 days is now actively pointless — the next nightly prune deletes it. So the ceiling
+is not a judgement call any more, it is 30 days, and the job shrinks accordingly.
+
+What survives is the part that was always the real value: **reaching a full 30-day window
+immediately instead of waiting a month for one.** The weekly band needs 7 days to exist at
+all and 4 weeks before its hit-rate means anything, so this is the difference between
+publishing bands in September and publishing them now.
+
+**Goal:** fill the retention window to its full 30 days, and cross-check our own coverage.
 **Effort:** 1 evening
 
 **Scope check before you build this.** Hypixel's `buyMovingWeek`/`sellMovingWeek` are
@@ -166,19 +183,24 @@ Watch for:
 - This script must never end up imported by the Worker. Enforce with an ESLint boundary
   rule if you can be bothered — a comment is not enforcement
 
-**Done when:** every tag referenced by a recipe has ≥30 days of `hourly` rows, and
-re-running the script is a no-op rather than a duplicate.
+**Done when:** every Tier A tag has a full 30 days of `hourly` rows with no gaps, and
+re-running the script is a no-op rather than a duplicate. Never request a range older than
+30 days — the prune will delete it, so fetching it only spends someone else's rate limit.
 
 ---
 
 ## Phase 4 — API and precompute
-**Status: code complete on branch `v0.4`, NOT deployed.** All seven endpoints, the KV
-precompute, the per-route `Cache-Control` reasoning and a stale-data test per endpoint
-are built; `npm test` is 210 green across 20 files and `npm run typecheck` is clean.
-Production still runs `main`, which predates this work — its `precompute` records
-`error: 'not implemented'` on every hourly cron, so `scan:default:v1` has never been
-written and `/api/scan` has no warm KV path to measure. The Done-when below stays open
-until `v0.4` is merged and deployed.
+**Status: DONE — deployed and verified 2026-08-25.** All seven endpoints live on version
+`59e5b9af`; `npm test` 219 green across 20 files, `npm run typecheck` clean. Verified
+against production rather than assumed:
+
+- `precompute` succeeded at 22:07:10 UTC (1256ms, no error) — the first successful run.
+  `scan:default:v1` exists in KV at 66,194 bytes and `/api/scan` returns `source: "kv"`
+  with 42 scored crafts, replacing the 42× `no-base-data` payload a dev session had left.
+- **Warm latency: median 4ms, max 5ms** server-side `wallTime` from observability, against
+  the <50ms target. Measured from tail events, not curl wall-clock.
+- Parameter validation returns 400 naming the offending parameter on both `/api/scan` and
+  `/api/craft/:tag`; `?tax=1.25` no longer returns a confident wrong answer.
 
 **Goal:** fast, cheap, honest endpoints.
 **Effort:** 2 evenings
@@ -203,8 +225,66 @@ Deliverables:
 - `Cache-Control` set deliberately per route; use the Cache API for history ranges
 - `/api/status` is public — data freshness is a feature, not a secret
 
-**Done when:** the default scan responds in <50ms warm, and every endpoint returns a
-correct `meta` block including during a stale-data window.
+**Done when:** ~~the default scan responds in <50ms warm~~ (met: 4ms median), and every
+endpoint returns a correct `meta` block including during a stale-data window.
+
+---
+
+## Phase 4.5 — Weekly bands and anvil merges
+**Goal:** the feature the site is actually for — trailing weekly high/low bands — plus
+enchanted-book merging as a second craft type.
+**Effort:** 3–4 evenings
+
+Read CLAUDE.md §8's two new subsections before starting. They carry the domain rules; this
+section is only the build order.
+
+### Part A — the conversion graph (do this first, both parts need it)
+
+`packages/core/src/convert.ts`. A recipe stops being "base × ratio → product" and becomes
+an edge in a graph; what the model wants is the **cheapest path** to one unit of the
+output. This single module serves three purposes:
+
+1. Anvil chains, where every intermediate level is itself tradeable and entering at level 3
+   is often cheaper than at level 1
+2. Tier-2 compaction (`SUGAR_CANE → ENCHANTED_SUGAR → ENCHANTED_SUGAR_CANE`), which is the
+   same problem and is currently **wrong in production** — see TODO.md
+3. Any future multi-step recipe, without a third implementation
+
+Build it generic over edges. Do not special-case anvils.
+
+### Part B — anvil merges
+
+- `packages/core/src/anvil.ts` — parse `ENCHANTMENT_{ENCHANT}_{LEVEL}` into (family,
+  level); derive each family's level range from the product list, never a hardcoded map
+- Migration: `recipes` needs a `kind` discriminator (`'compact' | 'anvil'`). The existing
+  table is `(base_tag, ench_tag, ratio, verified, note)` with `UNIQUE(base_tag, ench_tag)`,
+  which stores an anvil edge fine — `ratio` is 2 — but nothing currently distinguishes the
+  two craft types, and they have different UI, different gating, and different fill risk
+- Tier assignment gains the book level-endpoint clause (Phase 2 deliverables)
+- Seed anvil recipes for every family, all `verified = 0`
+
+### Part C — weekly bands
+
+- `packages/core/src/bands.ts` — trailing-window percentile bands plus hit-rate
+- `GET /api/bands/:tag?days=&pLow=&pHigh=` — buy band, sell band, hit counts, week count
+- `GET /api/bands` — ranked band scan, the band analogue of `/api/scan`
+- Precompute the default band scan to KV alongside the craft scan
+
+**Watch for:**
+- Sides. A buy order competes at `bid`, a sell offer at `ask` (CLAUDE.md §1). Building the
+  low band from the ask side inverts the whole strategy and is the single most likely bug
+  in this phase — write the test that would catch it first
+- Percentiles, not `MIN`/`MAX` — a 5-minute wick is not a transactable price
+- A band without its hit-rate is not shippable (non-negotiable #6)
+- 4 weeks is the *maximum* n the 30-day cap allows for multi-week claims. Report the week
+  count; never imply a longer track record
+- Anvil ratios are `2^(M-L)`, so an off-by-one in level arithmetic is a 2x cost error, not
+  a rounding difference
+
+**Done when:** a band endpoint returns buy/sell bands with hit-rates for any Tier A tag;
+the anvil scan ranks merges by profit-per-day with fill feasibility attached; the
+cheapest-path solver picks the right entry level on a hand-computed case; and
+`ENCHANTED_SUGAR_CANE` no longer reports a 3,000% margin.
 
 ---
 
@@ -219,18 +299,30 @@ the chart library behind your own component is the point; picking the "right" on
 is not.
 
 Views:
-1. **Scan table** — sortable, ranked by profit/day. Columns: craft, profit/craft, margin,
-   crafts/day, capital, flags. Filter by capital available.
-2. **Craft detail** — three scenarios side by side, price chart with buy/sell windows
-   shaded, hour-of-day bar chart, flag explanations in plain language.
-3. **Item page** — ask/bid history, depth, volume, volatility.
-4. **Settings drawer** — tax rate, capture fraction, sleep window, timezone. Persist to
-   `localStorage`. These change results a lot, so they must be visible, not buried.
+1. **Band table** — the landing view, and the reason the site exists. Per tag: buy band,
+   sell band, spread after tax, and the hit-rate for each side. Sortable, filterable by
+   capital. This is what someone opens before setting up orders for the evening.
+2. **Band detail** — price chart with both bands drawn as horizontal lines over the
+   trailing window, so "how often did price touch this" is answered visually rather than
+   asserted. Week count stated plainly.
+3. **Scan table** — sortable, ranked by profit/day. Columns: craft, profit/craft, margin,
+   crafts/day, capital, flags. Filter by capital available. Craft type (compaction vs
+   anvil) is a visible column, not an inferred detail.
+4. **Craft detail** — three scenarios side by side, price chart with buy/sell windows
+   shaded, hour-of-day bar chart, flag explanations in plain language. For anvil merges,
+   show the chosen entry level and what the alternatives would have cost.
+5. **Item page** — ask/bid history, depth, volume, volatility.
+6. **Settings drawer** — tax rate, capture fraction, band percentiles, sleep window,
+   timezone. Persist to `localStorage`. These change results a lot, so they must be
+   visible, not buried.
 
 Non-negotiable UI rules:
 - A margin number never appears without its fill-feasibility number adjacent
-- Unverified recipes are visually marked
+- A band never appears without its hit-rate adjacent — same rule, same reason
+- Unverified recipes are visually marked. Every anvil recipe starts unverified, so this
+  marking is load-bearing on launch rather than a rare edge case
 - Data age is always visible, not in a tooltip
+- Anything resting on fewer than 4 weeks says so where the number is, not in a footnote
 - Mobile works — a lot of this gets checked on a phone next to a game session
 
 **Done when:** Lighthouse performance >90, the site is usable at 375px wide, and someone
@@ -269,11 +361,14 @@ Candidates, roughly in value order:
   credit. Turns your biggest data-quality weakness into community participation.
 - **Shareable craft links** — `?tax=&capture=` in the URL so a Discord post reproduces
   exactly what the poster saw.
-- **Base-only diurnal view** — buy a material at 03:00, sell the same material at 19:00,
-  no crafting. Often beats crafting outright, and no competitor front-pages it.
+- ~~**Base-only diurnal view**~~ — **promoted to Phase 4.5** as the weekly band, and it is
+  now the site's primary feature rather than a retention candidate. The reasoning that put
+  it on this list still holds: it often beats crafting outright, it carries no
+  recipe-ratio or collection-gating risk, and no competitor front-pages it.
 - **Backtest** — "if you had run this strategy for 30 days, here is what happened."
   Expensive to build, but it is the one thing that turns a calculator into a tool people
-  trust.
+  trust — and with a 30-day window it is now *exactly* the span we retain, so a backtest
+  is the natural validation of the band strategy rather than a separate data problem.
 
 Deliberately **not** doing: user accounts, a mod, a mobile app, real-money anything.
 
@@ -283,9 +378,27 @@ Deliberately **not** doing: user accounts, a mod, a mobile app, real-money anyth
 **Goal:** the aggregated bazaar history, free and open, as bulk dumps.
 **Effort:** 2 evenings, but gated behind a month of proven collection
 
+**Re-scoped 2026-08-26: this is a rolling 30-day window, not an accumulating archive.**
+The retention cap (CLAUDE.md §3) means we never hold more than a month, so what gets
+published is "the last 30 days, refreshed daily" — a *current* dataset rather than a
+historical one. Two consequences worth being honest about up front:
+
+- **We are not the place to get 2024 bazaar history.** Anyone wanting a long series still
+  needs Coflnet or their own collector. Say so in the README rather than letting people
+  discover it after downloading.
+- **Dated files stop being immutable in the useful sense.** A day's file is still frozen
+  once written, but it *disappears* 30 days later. The manifest must state the window, and
+  consumers who want history have to mirror the dumps themselves. That is a legitimate
+  design — it is how a rolling feed works — but it must be documented, not implied.
+
+The upside: publishing a rolling window is a much weaker claim on Hypixel's policy than
+mirroring their history forever, which strengthens the position below rather than
+weakening it.
+
 **Hard gate: do not ship this until Phase 2 has run clean for 30 days.** A dataset with
 unmarked gaps is worse than no dataset, because people build on it and your silent cron
-failure becomes their corrupted analysis.
+failure becomes their corrupted analysis. With a 30-day window this gate is stricter, not
+looser — a 3-day outage is 10% of everything you would be publishing.
 
 ### Policy position — settle this before writing code
 
@@ -315,9 +428,11 @@ Mitigations, in order of value:
 - Public R2 bucket on `data.orangecheasy.net`. **Dumps, not a query API** — R2 has zero
   egress fees, so a static dated file costs nothing regardless of who downloads it, while
   a public query endpoint means unbounded D1 row reads driven by strangers' bad bots.
-- One **Parquet** file per day. DuckDB and pandas load it directly, so a year of history
-  is queryable on someone's laptop without touching our infrastructure at all.
-- `manifest.json` — available dumps, schema version, date coverage
+- One **Parquet** file per day. DuckDB and pandas load it directly, so the whole window is
+  queryable on someone's laptop without touching our infrastructure at all.
+- `manifest.json` — available dumps, schema version, date coverage, **and the retention
+  window stated explicitly** so a consumer knows files expire rather than discovering it
+  when a link 404s. Prune published dumps on the same 30-day schedule as everything else.
 - **Coverage report shipped alongside every dump**: per-tag hour counts, `samples`
   distribution, and an explicit list of known gaps. Non-negotiable; see §3b.
 - `Cache-Control: immutable` on dated files; short TTL on the manifest only
@@ -327,9 +442,9 @@ Mitigations, in order of value:
   that the underlying data originates from Hypixel and that this project is not affiliated
   with or endorsed by Hypixel or Mojang.
 
-**Done when:** someone who has never spoken to you can find the manifest, download a
-month, load it in DuckDB, and correctly identify which hours are low-confidence — without
-asking you anything.
+**Done when:** someone who has never spoken to you can find the manifest, download the
+window, load it in DuckDB, correctly identify which hours are low-confidence, and
+correctly understand that files older than 30 days are gone — without asking you anything.
 
 **Why this is worth doing:** Coflnet rate-limits and BazaarTracker paywalls the key.
 Nobody publishes bulk dumps. This is the exact problem that made this project annoying to

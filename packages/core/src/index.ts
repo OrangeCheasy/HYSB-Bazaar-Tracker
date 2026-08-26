@@ -76,6 +76,18 @@ export {
 } from "./economics.js";
 
 export {
+  cheapestPath,
+  type AcquisitionPrice,
+  type ConversionEdge,
+  type ConversionFlag,
+  type ConversionKind,
+  type ConversionPlan,
+  type ConversionStep,
+  type ConvertError,
+  type ConvertOptions,
+} from "./convert.js";
+
+export {
   DEFAULT_RATIO,
   RATIO_EXCEPTIONS,
   expectedRatio,

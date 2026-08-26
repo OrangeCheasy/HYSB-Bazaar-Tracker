@@ -239,6 +239,11 @@ Read CLAUDE.md §8's two new subsections before starting. They carry the domain 
 section is only the build order.
 
 ### Part A — the conversion graph (do this first, both parts need it)
+**Status: DONE 2026-08-26.** `packages/core/src/convert.ts` + 24 tests. Core coverage
+98.35% stmts / 94.75% branch / 100% lines. One uniform edge type, no discriminated union —
+`2^k` emerges from composing k edges of `inputPerOutput: 2` rather than being a special
+case. Multiplicative shortest path, Dijkstra-safe because `inputPerOutput >= 1` means
+traversing an edge never lowers cost, so cyclic recipe graphs cannot spiral.
 
 `packages/core/src/convert.ts`. A recipe stops being "base × ratio → product" and becomes
 an edge in a graph; what the model wants is the **cheapest path** to one unit of the

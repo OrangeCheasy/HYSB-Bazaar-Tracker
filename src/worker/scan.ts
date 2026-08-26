@@ -7,6 +7,8 @@ import {
   cheapestPath,
   computeHourProfile,
   detectMergeGates,
+  mergeTargetLevel,
+  MIN_MERGE_LEVEL,
   computeStats,
   hourRange,
   meanOverHours,
@@ -421,15 +423,29 @@ export async function runAnvilScan(
     );
   }
 
-  /** Target the top rung of each family — the one a merge strategy actually sells. */
-  const topLevel = new Map<string, number>();
+  /**
+   * Target the top rung a merge can actually REACH, not the top rung that exists.
+   *
+   * Anvil merging stops at level 5 for most enchants; the level 6 and 7 rungs 36 families
+   * list come from elsewhere in the game, so routing to them prices a craft nobody can
+   * perform. `mergeTargetLevel` applies that cap, and leaves the families that genuinely
+   * merge to 10 alone. This is the structural counterpart to ADR-025's price-side gate.
+   */
+  const levelsByFamily = new Map<string, number[]>();
   for (const e of mergeableEdges) {
-    const parsed = parseBookTag(e.to);
-    if (!parsed) continue;
-    const current = topLevel.get(parsed.family);
-    if (current === undefined || parsed.level > current) {
-      topLevel.set(parsed.family, parsed.level);
+    for (const tag of [e.from, e.to]) {
+      const parsed = parseBookTag(tag);
+      if (!parsed) continue;
+      const list = levelsByFamily.get(parsed.family);
+      if (list === undefined) levelsByFamily.set(parsed.family, [parsed.level]);
+      else list.push(parsed.level);
     }
+  }
+  const topLevel = new Map<string, number>();
+  for (const [family, levels] of levelsByFamily) {
+    const target = mergeTargetLevel(levels);
+    // A family whose only reachable rung is its entry level has nothing to merge INTO.
+    if (target !== undefined && target > MIN_MERGE_LEVEL) topLevel.set(family, target);
   }
 
   let dataTo = now;

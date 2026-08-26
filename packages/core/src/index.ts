@@ -96,7 +96,10 @@ export {
 export {
   ANVIL_INPUT_PER_OUTPUT,
   DEFAULT_MAX_IMPLIED_MERGE_RATIO,
+  ANVIL_FULL_CHAIN_LEVEL,
+  ANVIL_SOFT_CAP_LEVEL,
   MIN_MERGE_LEVEL,
+  mergeTargetLevel,
   anvilEdges,
   bookTagFor,
   booksRequired,
@@ -130,6 +133,7 @@ export {
   expectedRatio,
   isEnchantedTag,
   parityPrice,
+  deriveCompactionRecipes,
   validateRecipe,
   type Recipe,
   type RecipeKind,

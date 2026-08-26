@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { bandEconomics, computeBand } from "../src/bands.js";
 import { analyzeCraft } from "../src/economics.js";
+import { DEFAULT_SCAN_QUERY } from "../src/params.js";
 import { computeStats } from "../src/stats.js";
 import type { Bar } from "../src/sides.js";
 
@@ -158,5 +159,40 @@ describe("fillFeasibility is a FRACTION on 0..1", () => {
       expect(fillFeasibility).toBeGreaterThanOrEqual(0);
       expect(fillFeasibility).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+/**
+ * The tick is the step you pay to sit in front of the queue, and it is applied per UNIT —
+ * so on a 160:1 craft it is multiplied 160 times before it reaches the margin.
+ *
+ * These use the real COAL book measured from the live payload (bid 5.31, ask 10.33,
+ * enchanted coal ask 1623.77), because the bug only shows up at the bottom of the market
+ * and a synthetic fixture at parity hides it entirely.
+ */
+describe("the undercut tick", () => {
+  const COAL_BID = 5.3146;
+
+  it("is the bazaar's real minimum increment, not a whole coin", () => {
+    // Measured across every product's live order book: the smallest gap between adjacent
+    // resting orders is exactly 0.1, and cheap items sit on 0.1 boundaries throughout.
+    expect(DEFAULT_SCAN_QUERY.tick).toBe(0.1);
+  });
+
+  it("no longer inflates a cheap craft's cost by nearly a fifth", () => {
+    const withOldTick = (COAL_BID + 1) * 160;
+    const withRealTick = (COAL_BID + DEFAULT_SCAN_QUERY.tick) * 160;
+
+    // A whole-coin step on a 5.31-coin material added 160 coins to an ~850-coin craft.
+    expect((withOldTick - withRealTick) / withRealTick).toBeGreaterThan(0.15);
+    // And the correct figure is within a couple of percent of just paying the bid.
+    expect((withRealTick - COAL_BID * 160) / (COAL_BID * 160)).toBeLessThan(0.02);
+  });
+
+  it("is negligible on an expensive item, which is why this hid for so long", () => {
+    // The same absolute step against a 20M book is nothing, so every book-shaped craft
+    // looked fine while every cheap material was quietly overpriced.
+    const book = 19_800_000;
+    expect((DEFAULT_SCAN_QUERY.tick / book) * 100).toBeLessThan(0.000001);
   });
 });

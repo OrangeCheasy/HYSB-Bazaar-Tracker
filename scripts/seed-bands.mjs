@@ -16,68 +16,102 @@ const HOURS = 24 * 30; // 30 days, so weekCount reaches its ceiling of 4
 const now = Math.floor(Date.now() / 1000 / HOUR) * HOUR;
 
 /**
- * A spread of shapes, chosen to exercise the states the table has to render rather than to
- * look plausible: a healthy mover, a thin expensive book, one whose bands are never both
- * touched, one that only has a few days of history, and one with thin samples.
+ * Base materials, priced roughly where the live bazaar has them.
+ *
+ * The enchanted forms are DERIVED from these (see below) rather than given fixed prices.
+ * An earlier version of this fixture set them independently and landed them at almost
+ * exactly 160x parity, which made every compaction craft break even — so the local scan
+ * showed COAL to ENCHANTED_COAL at -12.9% while production showed +45%, and the fixture
+ * looked exactly like a bug in the economics. Measured multiples over parity on the live
+ * market: coal 1.76x, sugar cane 1.97x, diamond 1.41x, ender pearl 8.62x. Nothing trades
+ * at parity, because Super Compactor supply sets a floor rather than a fair value.
  */
-const TAGS = [
-  {
-    tag: "ENCHANTED_SUGAR_CANE",
-    mid: 1_240_000,
-    vol: 0.04,
-    ibWeek: 41_000,
-    isWeek: 52_000,
-    hours: HOURS,
-    samples: 12,
-  },
-  {
-    tag: "ENCHANTED_COAL",
-    mid: 870,
-    vol: 0.05,
-    ibWeek: 2_400_000,
-    isWeek: 2_900_000,
-    hours: HOURS,
-    samples: 12,
-  },
+const BASES = [
   {
     tag: "COAL",
-    mid: 5.4,
+    mid: 5.8,
+    ratio: 160,
+    multiple: 1.76,
     vol: 0.03,
     ibWeek: 88_000_000,
     isWeek: 91_000_000,
-    hours: HOURS,
-    samples: 12,
   },
   {
-    tag: "ENCHANTED_ENDER_PEARL",
-    mid: 2_480_000,
+    tag: "SUGAR_CANE",
+    mid: 2.14,
+    ratio: 160,
+    multiple: 1.97,
+    vol: 0.04,
+    ibWeek: 60_000_000,
+    isWeek: 64_000_000,
+  },
+  {
+    tag: "DIAMOND",
+    mid: 5.93,
+    ratio: 160,
+    multiple: 1.41,
     vol: 0.035,
-    ibWeek: 12_400,
-    isWeek: 15_100,
-    hours: HOURS,
-    samples: 12,
+    ibWeek: 12_000_000,
+    isWeek: 13_500_000,
   },
-  // Under four weeks — must render its week count inline.
   {
-    tag: "ENCHANTED_CACTUS_GREEN",
-    mid: 148_000,
-    vol: 0.045,
-    ibWeek: 61_000,
-    isWeek: 70_000,
-    hours: 24 * 9,
-    samples: 12,
+    tag: "ENDER_PEARL",
+    mid: 1.2,
+    ratio: 20,
+    multiple: 8.62,
+    vol: 0.05,
+    ibWeek: 9_000_000,
+    isWeek: 9_800_000,
   },
-  // Hours assembled from a fraction of their ticks — must carry the thin-samples flag.
+  // Thin samples: hours built from a fraction of their ticks, so it carries that flag.
   {
-    tag: "ENCHANTED_RAW_FISH",
-    mid: 96_500,
+    tag: "RAW_FISH",
+    mid: 12.4,
+    ratio: 160,
+    multiple: 1.5,
     vol: 0.06,
-    ibWeek: 22_000,
-    isWeek: 26_000,
-    hours: HOURS,
+    ibWeek: 900_000,
+    isWeek: 1_100_000,
     samples: 3,
   },
+  // Under four weeks of history, so its band reports a short window.
+  {
+    tag: "CACTUS",
+    mid: 3.1,
+    ratio: 160,
+    multiple: 1.6,
+    vol: 0.045,
+    ibWeek: 40_000_000,
+    isWeek: 44_000_000,
+    hours: 24 * 9,
+  },
 ];
+
+const TAGS = [];
+for (const base of BASES) {
+  const hours = base.hours ?? HOURS;
+  const samples = base.samples ?? 12;
+  TAGS.push({
+    tag: base.tag,
+    mid: base.mid,
+    vol: base.vol,
+    ibWeek: base.ibWeek,
+    isWeek: base.isWeek,
+    hours,
+    samples,
+  });
+  TAGS.push({
+    tag: `ENCHANTED_${base.tag}`,
+    // The whole point: priced off the base, at the multiple the real market shows.
+    mid: base.mid * base.ratio * base.multiple,
+    vol: base.vol * 0.7,
+    // An enchanted form trades in far fewer units than its base, by roughly the ratio.
+    ibWeek: Math.max(1, Math.round(base.ibWeek / base.ratio / 3)),
+    isWeek: Math.max(1, Math.round(base.isWeek / base.ratio / 3)),
+    hours,
+    samples,
+  });
+}
 
 /**
  * Enchant families, as full level chains.

@@ -2,6 +2,7 @@ import {
   aggregate,
   aggregateBars,
   anvilEdges,
+  deriveCompactionRecipes,
   deriveFamilies,
   err,
   normalizeHourlyRow,
@@ -22,6 +23,7 @@ import { boundedDelete } from "./db/prune.js";
 import {
   buildAnvilRecipePrune,
   buildAnvilRecipeUpsert,
+  buildCompactionRecipeUpsert,
   type AnvilRecipeRow,
 } from "./db/recipes.js";
 import { recordRun } from "./db/runs.js";
@@ -299,7 +301,20 @@ export async function syncAnvilRecipes(env: Env): Promise<number> {
   const { results } = await env.DB.prepare("SELECT tag FROM products").all<{ tag: string }>();
   if (results.length === 0) return 0;
 
-  const families = deriveFamilies(results.map((r) => r.tag));
+  const tags = results.map((r) => r.tag);
+
+  // Compaction recipes are derived the same way, and for the same reason. The seeded list
+  // covered 43 crafts; the live catalogue supports 49 more that name-match exactly, so half
+  // the board was invisible to the scan. INSERT ... DO NOTHING, so a curated row always
+  // wins over a derived one.
+  const compaction = deriveCompactionRecipes(tags);
+  const compactionStatements = buildCompactionRecipeUpsert(
+    env.DB,
+    compaction.map((r) => ({ baseTag: r.baseTag, enchTag: r.enchTag, ratio: r.ratio })),
+  );
+  if (compactionStatements.length > 0) await env.DB.batch(compactionStatements);
+
+  const families = deriveFamilies(tags);
   const edges = anvilEdges(families);
   const rows: AnvilRecipeRow[] = edges.map((e) => ({
     baseTag: e.from,
@@ -311,5 +326,5 @@ export async function syncAnvilRecipes(env: Env): Promise<number> {
   if (statements.length > 0) await env.DB.batch(statements);
   await buildAnvilRecipePrune(env.DB).run();
 
-  return rows.length;
+  return rows.length + compaction.length;
 }

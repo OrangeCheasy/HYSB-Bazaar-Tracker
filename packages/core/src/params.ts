@@ -66,9 +66,24 @@ export type BandParamName = keyof typeof BAND_PARAM_RANGES;
 export const DEFAULT_SCAN_QUERY = {
   tax: 0.0125,
   capture: 0.2,
-  // A single global tick is a simplification — a cheap material and a pricey enchanted
-  // one deserve different step sizes — but it matches MarketConfig's shape today.
-  tick: 1,
+  /**
+   * The bazaar's minimum price increment, measured rather than assumed.
+   *
+   * Across every product's live order book the smallest gap between adjacent resting
+   * orders is exactly 0.1, and cheap items sit on 0.1 boundaries throughout — COAL's top
+   * buy orders read 9.5, 9.8, 10, 10.1, 10.2. So 0.1 is what undercutting actually costs.
+   *
+   * This was 1, and on a cheap material that is not a rounding difference: stepping a
+   * 5.31-coin bid by a whole coin inflated the cost of a 160x craft by **18.8%**, which is
+   * larger than the entire margin on most crafts and made COAL-to-ENCHANTED_COAL look far
+   * worse than it is. The error grew as the base got cheaper — precisely the items where
+   * compaction is worth doing.
+   *
+   * Still one global step rather than a per-item one, which remains a simplification: real
+   * traders undercut a 20M book by more than 0.1. But it is now a floor that is true
+   * everywhere instead of a guess that is wrong at the bottom of the market.
+   */
+  tick: 0.1,
   sleepStart: 23,
   sleepEnd: 7,
   window: 8,

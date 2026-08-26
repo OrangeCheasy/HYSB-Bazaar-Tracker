@@ -83,6 +83,32 @@ const PARAMS_PER_ROW = 5; // base_tag, ench_tag, ratio, verified, kind
  * Chunked by bound-parameter count, not row count — D1 caps params at 100 per query, so
  * ~620 rows becomes ~31 statements (CLAUDE.md section 3).
  */
+/**
+ * Upsert derived COMPACTION recipes.
+ *
+ * Separate from the anvil upsert only because `kind` differs; the honesty rules are the
+ * same. `verified` is written as 0 on insert and never touched on conflict, so confirming
+ * a ratio in-game survives the next nightly sync — and `ratio` is deliberately NOT
+ * refreshed here, unlike the anvil edges. An anvil edge's ratio is arithmetic (always 2), so
+ * recomputing it is safe; a compaction ratio is a guess about a crafting grid, and a
+ * hand-corrected 144 must not be overwritten by the derivation's default 160 every night.
+ */
+export function buildCompactionRecipeUpsert(
+  db: Pick<D1Database, "prepare">,
+  rows: readonly AnvilRecipeRow[],
+): D1PreparedStatement[] {
+  return chunkByParamCount(rows, PARAMS_PER_ROW).map((chunk) => {
+    const placeholders = chunk.map(() => "(?, ?, ?, ?, ?)").join(", ");
+    const sql = `
+      INSERT INTO recipes (base_tag, ench_tag, ratio, verified, kind)
+      VALUES ${placeholders}
+      ON CONFLICT(base_tag, ench_tag) DO NOTHING
+    `;
+    const args = chunk.flatMap((r) => [r.baseTag, r.enchTag, r.ratio, 0, "compact"]);
+    return db.prepare(sql).bind(...args);
+  });
+}
+
 export function buildAnvilRecipeUpsert(
   db: Pick<D1Database, "prepare">,
   rows: readonly AnvilRecipeRow[],

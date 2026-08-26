@@ -171,9 +171,9 @@ Verified against Cloudflare docs; re-check before assuming.
     table to compute multi-week band hit-rates from (§8).
   - **Total ≈ 538 MB and flat**, about 5% of the 10 GB cap, with ~16.8M rows/month written
     including deletes against the 50M included (~34%).
-  - Untiered 5-min coverage of all 2,136 products would be 617 MB in `snapshots` at 7-day
-    retention — which now *fits*. The storage argument for tiering has genuinely
-    evaporated; the write-budget and signal-quality arguments in §2 are what remain.
+  - Untiered 5-min coverage of all 2,136 products would be 617 MB at 7-day retention —
+    which now *fits*. The storage argument for tiering has evaporated; the write-budget
+    and signal-quality arguments in §2 are what remain.
 - **Deletes count as rows written.** Pruning is not free — budget deletes alongside
   inserts when checking against the 50M/month included.
 - **R2 raw archive sizing** — the full response including `buy_summary`/`sell_summary` is
@@ -294,7 +294,18 @@ function needs data, it takes it as an argument.
 - Errors: return typed results (`{ ok: true, value } | { ok: false, error }`) in core;
   throw only at boundaries.
 - SQL lives in `src/worker/db/`, never inline in route handlers.
-- Migrations are forward-only and numbered. Never edit an applied migration.
+- Migrations are forward-only and numbered. **Never edit an applied migration** — doing so
+  to `0001` is what caused the drift that `0004`/`0005` had to repair, and then made the
+  whole chain unreplayable. Fix mistakes with a new numbered file.
+  - **A fresh database must be able to replay the entire chain.** This is the property the
+    rule protects and the one worth testing, because nothing else notices when it breaks:
+    `wrangler d1 migrations apply bazaar --local --persist-to <tmpdir>` builds one from
+    scratch. Do this after adding a migration.
+  - **Never create an index or column directly against production.** Production carried two
+    indexes that appeared in no migration until `0007` reconciled them; untracked drift in
+    that direction is the same failure as editing a migration, just harder to see.
+  - One deliberate exception exists (ADR-024: `0004`/`0005` emptied). Not a precedent — the
+    bar was "provably dead *and* breaks every new database", not "inconvenient".
 
 ## 6. Commands
 

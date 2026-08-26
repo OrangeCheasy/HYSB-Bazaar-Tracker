@@ -1,42 +1,48 @@
 -- 0004_fix_remote_0001_drift.sql
--- Forward-only. Never edit an applied migration; add a new numbered file instead.
 --
--- Why this migration exists instead of 0002 having just worked:
--- `migrations/0001_initial.sql` was edited in place after it had already been applied
--- to the remote D1 database (commit a88c1d2 applied remotely on 2026-08-24 08:00:42,
--- then commit 5ab7298 added `depth_1pct`/`depth_5pct`/`max_wall` to the same file's
--- `snapshots` CREATE TABLE). That's exactly the mistake CLAUDE.md section 5 warns
--- against. Local dev never noticed because `wrangler d1 migrations apply --local`
--- reruns against a fresh SQLite file that always reflects the latest 0001 content.
--- Remote's `d1_migrations` bookkeeping table only ever recorded the pre-edit 0001, so
--- remote's real `snapshots` table never had those three columns at all -- which is why
--- 0002's `ALTER TABLE snapshots DROP COLUMN depth_1pct` failed with
--- "no such column: depth_1pct" (SQLITE_ERROR 7500) when applied for real.
+-- NEUTERED 2026-08-26. This file intentionally contains no statements. See ADR-024.
 --
--- This migration brings remote directly to the schema 0002 intended, skipping the
--- DROP COLUMN statements entirely since the columns they'd drop were never created on
--- remote in the first place. Confirmed via `PRAGMA table_info(snapshots)` /
--- `PRAGMA table_info(hourly)` against remote before writing this file. Target end
--- state matches what src/worker/db/snapshots.ts and src/worker/db/hourly.ts already
--- query against.
+-- ============================================================================
+-- Read this before "restoring" the statements below into something runnable.
+-- ============================================================================
 --
--- This is remote-only in effect, not just in origin: on any database that applies the
--- full chain from scratch (a fresh --local dev DB, or a from-scratch remote D1 if this
--- database is ever recreated), 0001+0002 already reach this exact same end state on
--- their own, so this file's ADD COLUMNs would collide with 0002's ("duplicate column
--- name"). On such a database, INSERT this migration's name (and 0005's) directly into
--- d1_migrations as already-applied instead of letting wrangler execute its SQL --
--- exactly as done for 0002 on remote itself. Do not try to make the ALTER statements
--- below conditional -- SQLite's ALTER TABLE has no ADD COLUMN IF NOT EXISTS, and that
--- would make this file harder to review than the bookkeeping-only workaround.
+-- What this migration used to do:
+--
+--   ALTER TABLE snapshots ADD COLUMN ask_depth_1pct   REAL;
+--   ALTER TABLE snapshots ADD COLUMN bid_depth_1pct   REAL;
+--   ALTER TABLE snapshots ADD COLUMN ask_depth_5pct   REAL;
+--   ALTER TABLE snapshots ADD COLUMN bid_depth_5pct   REAL;
+--   ALTER TABLE snapshots ADD COLUMN ask_max_wall     REAL;
+--   ALTER TABLE snapshots ADD COLUMN bid_max_wall     REAL;
+--   ALTER TABLE snapshots ADD COLUMN ask_order_count  REAL;
+--   ALTER TABLE snapshots ADD COLUMN bid_order_count  REAL;
+--   ALTER TABLE hourly    ADD COLUMN last_tick_ts INTEGER NOT NULL DEFAULT 0;
+--
+-- Why it existed: `0001_initial.sql` was edited in place after it had already been
+-- applied to the REMOTE database (commit a88c1d2 applied remotely 2026-08-24 08:00:42,
+-- then commit 5ab7298 added depth columns to the same file's snapshots CREATE TABLE).
+-- Remote's `d1_migrations` had only ever recorded the pre-edit 0001, so remote's real
+-- schema was missing those columns and 0002's DROP COLUMN statements failed there. This
+-- migration repaired that one database.
+--
+-- Why it is now empty: the repair was for a specific historical state of ONE database,
+-- and it is long since applied there. On any *clean* database the statements above are
+-- not merely redundant, they are fatal — `0002` already adds every one of these columns,
+-- so a fresh chain died on `duplicate column name: ask_depth_1pct` at this file. That
+-- made the entire migration set unreplayable: no preview environment, no second dev
+-- machine, no disaster recovery, and ROADMAP Phase 6's "CI runs migrations then deploys"
+-- could never have worked.
+--
+-- Verified before neutering (2026-08-26): a fresh database running 0001 -> 0002 -> 0003
+-- -> 0006, skipping this file and 0005 entirely, produces a schema byte-identical to
+-- production across all six application tables. These statements add nothing.
+--
+-- Safe for already-migrated databases because D1's bookkeeping is name-based, not
+-- content-hashed: `d1_migrations` is (id, name UNIQUE, applied_at). Remote recorded this
+-- filename on 2026-08-25 and will never re-read it.
+--
+-- Do not delete this file or renumber it. Its NAME is load-bearing — removing it would
+-- make wrangler try to apply 0005 and 0006 against a bookkeeping table that expects this
+-- entry, and every already-migrated database would disagree with the repo.
 
-ALTER TABLE snapshots ADD COLUMN ask_depth_1pct   REAL;
-ALTER TABLE snapshots ADD COLUMN bid_depth_1pct   REAL;
-ALTER TABLE snapshots ADD COLUMN ask_depth_5pct   REAL;
-ALTER TABLE snapshots ADD COLUMN bid_depth_5pct   REAL;
-ALTER TABLE snapshots ADD COLUMN ask_max_wall     REAL;
-ALTER TABLE snapshots ADD COLUMN bid_max_wall     REAL;
-ALTER TABLE snapshots ADD COLUMN ask_order_count  REAL;
-ALTER TABLE snapshots ADD COLUMN bid_order_count  REAL;
-
-ALTER TABLE hourly ADD COLUMN last_tick_ts INTEGER NOT NULL DEFAULT 0;
+SELECT 1;

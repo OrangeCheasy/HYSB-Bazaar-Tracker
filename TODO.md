@@ -37,63 +37,54 @@ One of those tests earned its keep immediately: the R2 delete originally advance
 pagination cursor while deleting underneath it, which silently skipped ~40% of keys. The
 fix re-lists from the start each round instead.
 
+## Also done — migrations replay again (ADR-024)
+
+The chain could not be rebuilt on a clean database: `0004`/`0005` were unconditional
+`ADD COLUMN`s repairing a one-time drift on remote, and on any fresh database `0002` had
+already added those columns, so a replay died on `duplicate column name:
+ask_depth_1pct`. That meant no preview environment, no second dev machine, no disaster
+recovery, and ROADMAP Phase 6's "CI runs migrations then deploys" could never have worked.
+
+- `0004`/`0005` are now comment-only files preserving their original statements and the
+  reasoning. Safe because D1's bookkeeping is name-based — `d1_migrations (id, name
+  UNIQUE, applied_at)`, no content hash — so already-migrated databases never re-read them.
+  Verified before acting.
+- A squash was the other option and was rejected: it edits five applied migrations instead
+  of two *and* needs production bookkeeping rewritten by hand. Strictly more risk, same end
+  state.
+- **`0007_converge_indexes.sql`** fixes drift found on the way: production carried
+  `idx_daily_day_ts` and `idx_runs_kind_started`, which appear in **no migration**, and
+  lacked `idx_runs_started`, which `0001` creates. Someone had created indexes directly
+  against production — the same failure as editing a migration, pointed the other way, and
+  invisible until you try to build a second database. Each surviving index is now justified
+  against a real query; `idx_runs_started` is dropped because none needs it.
+  `idx_daily_day_ts` turns out to matter: the new 30-day `daily` prune scans
+  `WHERE day_ts < cutoff` across all tags, which `daily`'s `(tag, day_ts)` primary key
+  cannot serve.
+- Verified: a from-scratch replay of all seven migrations now produces a database
+  byte-identical to production across six tables, 43 recipes, and the same five indexes.
+  `0007` applied to remote and local; production reports no pending migrations and all four
+  run kinds still `ok=true`.
+
+To check this property in future: `wrangler d1 migrations apply bazaar --local --persist-to
+<tmpdir>` builds a database from scratch without touching your working state. CLAUDE.md
+section 5 now asks for this after adding a migration.
+
 ## Do these, in this order
 
-### 1. Commit and push — production is running uncommitted code
+### 1. Commit and push
 
-Everything above is **deployed but not committed**. The working tree holds the retention
-changes (`rollup.ts`, `archive.ts`, `db/prune.ts`), migration `0006`, two new test files,
-and the doc rewrites. Until this is committed, `main` does not describe what is live and a
-rollback has nothing to roll back to.
+The migration-replay work above (`0004`, `0005`, `0007`, CLAUDE.md §5, ADR-024, this file)
+is uncommitted. The previous batch landed as `cfb6326` on `v0.bugfix`.
 
-### 2. The migration chain cannot be replayed on a clean database
+### 2. Phase 2's 48-hour clock is running
 
-Found while fixing local dev, and it is worse than a local-dev annoyance.
-
-`0004_fix_remote_0001_drift.sql` unconditionally runs `ALTER TABLE snapshots ADD COLUMN
-ask_depth_1pct` and seven siblings. On any fresh database `0002` has *already* added those
-columns, so `0004` dies on `duplicate column name: ask_depth_1pct`. `0005` has the same
-shape against `products`/`runs`. Both exist purely to repair a one-time drift on the
-**remote** database, caused by editing `0001` after it had been applied.
-
-Reproduced from scratch this session: `0001 → 0002 → 0003` apply, `0004` fails.
-
-Consequences beyond dev convenience:
-- No new environment can be built from migrations — which is exactly what ROADMAP Phase 6
-  asks for (a preview Worker environment, and CI running migrations before deploy)
-- Disaster recovery has no path back to a working schema
-- A second dev machine cannot get started
-
-Local was unblocked by inserting `0004`/`0005` into local `d1_migrations` by hand, since a
-fresh `0001`+`0002` already produces the columns they add. That is a workaround, not a fix.
-
-Two real options, and this is a judgement call worth making deliberately:
-- **Squash to a baseline.** Replace `0001`–`0005` with one migration that creates the
-  current schema, and reconcile remote's `d1_migrations` bookkeeping to match. Cleanest
-  end state, needs care against production.
-- **Neuter `0004`/`0005`** into comment-only files. They have no remaining purpose — the
-  drift they repaired exists on exactly one database and is already repaired. Cheap, but it
-  means editing applied migrations, which is the specific act that caused this mess and
-  which CLAUDE.md section 5 forbids.
-
-I did not pick one unilaterally: both touch production bookkeeping, and the forbidden-by-
-CLAUDE.md option may still be the right call given those files are provably dead.
-
-### 3. Start Phase 2's 48-hour clock
-
-The blocker is cleared — `runs` shows zero errors across every kind including `prune`. The
-clock starts from **2026-08-26 ~03:00 UTC**, so the earliest close is **2026-08-28 03:00
-UTC**, provided nothing errors in between.
+Started **2026-08-26 ~03:00 UTC**; earliest close **2026-08-28 03:00 UTC**, provided
+nothing errors in between. Timer is being tracked externally.
 
 The remaining Done-when clause after that is "pruning has actually deleted something."
-Today's prune deleted 0 legitimately — nothing is past retention. `snapshots` crosses 7
-days on **~2026-09-01**, which is the earliest that clause can close.
-
-### 4. Rotate the API token
-
-Carried over. A token was pasted into a chat session on 2026-08-25 in plaintext. The token
-in `.env.local` works and `.env.*` is correctly gitignored, but I cannot tell whether it is
-the rotated one. If it is, delete this item.
+Today's prune deleted 0 legitimately — nothing is past retention yet. `snapshots` crosses 7
+days on **~2026-09-01**, the earliest that clause can close.
 
 ## Then — Phase 4.5
 
@@ -122,7 +113,7 @@ that comment when you build it.
 
 ```bash
 npm install
-npm run db:migrate:local   # see item 2 — fails on a fresh DB at 0004 until that is fixed
+npm run db:migrate:local   # replays cleanly from scratch again as of ADR-024
 npm run build              # dist/client must exist for wrangler dev's assets binding
 ```
 
@@ -151,8 +142,8 @@ Two things that cost time this session and will cost it again:
   wide spread rather than a bad ratio, but worth one look while the flag vocabulary is
   still being tuned.
 - `0001_initial.sql`'s comment on `products.tier` still says "pruned to 90d then rolled to
-  daily", which ADR-021 superseded. It is inside an applied migration, so leave it unless
-  item 2 squashes the chain anyway.
+  daily", which ADR-021 superseded. It is a comment inside an applied migration and changes
+  no behaviour — left alone deliberately rather than widening ADR-024's exception.
 - The Python reference tool (`bzapi.py`, `bzcraft.py`, `model.py`, `config.json`) still
   lives at repo root rather than `reference/bzcraft/`. Harmless; the ADRs cite root paths.
 - Backup tags `backup/old-main-dc71bff` and `backup/old-phase0-7a90a97` from the orphaned-

@@ -630,3 +630,55 @@ ranking concern, not a detection one.
 **Cost:** more upfront design than a second `if` branch, and a graph solver is harder to
 read than a multiplication. Accepted because `recipes` gains a `kind` discriminator either
 way, and the alternative is two divergent implementations of the same arithmetic.
+
+---
+
+## ADR-024 — 0004/0005 are emptied so the migration chain can replay
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+`0004_fix_remote_0001_drift.sql` and `0005_fix_remote_0001_drift_products_runs.sql` are
+reduced to comment-only files (a bare `SELECT 1;` to keep wrangler happy). Their original
+statements are preserved verbatim in those comments. This edits migrations that have
+already been applied, which CLAUDE.md section 5 forbids.
+
+**The problem.** Both files were one-time repairs for drift on the *remote* database,
+caused by editing `0001` after it had been applied there. Their statements are
+unconditional `ALTER TABLE ... ADD COLUMN`, and on any clean database `0002` has already
+added every one of those columns. So a fresh chain died:
+
+```
+0001 ✅ → 0002 ✅ → 0003 ✅ → 0004 ✗ duplicate column name: ask_depth_1pct
+```
+
+Reproduced from scratch before deciding. That is not a dev-convenience bug: it means no
+preview environment, no second dev machine, no disaster recovery, and ROADMAP Phase 6's
+"CI runs migrations then deploys" could never have worked. The migration set had quietly
+stopped being able to build the thing it describes.
+
+**Why editing them is safe.** D1's bookkeeping is `d1_migrations (id, name UNIQUE,
+applied_at)` — name-based, with no content hash. Remote recorded both filenames on
+2026-08-25 and will never read them again. Verified before acting, not assumed.
+
+**Why not a squash.** Squashing `0001`–`0005` into a baseline was the other candidate and
+is the more conventional answer. It was rejected because it edits *more* applied
+migrations (five instead of two) and additionally requires rewriting production's
+`d1_migrations` rows by hand. Strictly more risk for the same end state. Emptying two
+provably dead files is the smaller change.
+
+**Verification.** A from-scratch replay now produces a database byte-identical to
+production across all six application tables, with the same 43 recipes and — after
+ADR-024's companion migration `0007` — the same five indexes.
+
+**What this exposed on the way.** The index sets did *not* match. Production carried
+`idx_daily_day_ts` and `idx_runs_kind_started`, which appear in no migration, and lacked
+`idx_runs_started`, which `0001` creates. Someone had created indexes directly against
+production. That is the same failure as editing a migration, pointed the other way, and it
+is invisible until you try to build a second database. `0007` reconciles it by justifying
+each index against a query that exists in the code, and drops `idx_runs_started`, which no
+query needs.
+
+**Cost.** The rule in CLAUDE.md section 5 now has a documented exception, and exceptions
+erode rules. Mitigated by stating the bar explicitly — "provably dead *and* actively breaks
+new databases" — and by adding the replay check to section 5, so the property this rule
+exists to protect is something you can actually test instead of merely intend.

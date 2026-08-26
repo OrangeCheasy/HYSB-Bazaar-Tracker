@@ -84,12 +84,16 @@ reusable-systems discipline that makes a multi-project studio work.
 ---
 
 ## Phase 2 — Data layer and ingestion
-**Status: deployed and ingesting; Done-when not yet met.** Remote D1 migrated, R2
-bucket created, cron live. Ingest and rollup have run clean since the 2026-08-25 18:10
-deploy, and `archive/2026-08-25/*.json.gz` objects are real. The 48-hour zero-error
-window has **not** started: `precompute` still errors every hour (production runs `main`,
-which predates Phase 4), and since that same deploy every cron fires twice ~54s apart.
-Both are tracked in `TODO.md`.
+**Status: deployed and ingesting; 48-hour clock started 2026-08-26 ~03:00 UTC.** Remote D1
+migrated, R2 bucket holding real per-tick objects, cron live and steady at 12 ingests/hour.
+As of version `795c2c5d`, **all four run kinds report `ok=true, error=null`** — the
+`precompute` and double-cron problems that blocked the clock are both resolved, and
+`prune` has recorded its first clean production run.
+
+Two Done-when clauses remain open, both on the calendar rather than on anyone's desk:
+48 unattended error-free hours (earliest close **2026-08-28 03:00 UTC**) and "pruning has
+actually deleted something", which cannot happen until `snapshots` crosses 7 days on
+**~2026-09-01**. Today's prune deleted 0 rows correctly — nothing was past retention.
 
 **Goal:** the cron keeps D1 filled with a rolling 30 days of real bazaar history, running
 indefinitely without falling over.

@@ -76,6 +76,24 @@ export {
 } from "./economics.js";
 
 export {
+  DEFAULT_HIGH_PERCENTILE,
+  DEFAULT_LOW_PERCENTILE,
+  DEFAULT_WINDOW_DAYS,
+  HOURS_PER_WEEK,
+  bandEconomics,
+  computeBand,
+  type BandEconomics,
+  type BandError,
+  type BandFlag,
+  type BandHitRate,
+  type BandInputs,
+  type BandMarket,
+  type BandThroughput,
+  type BandVolume,
+  type WeeklyBand,
+} from "./bands.js";
+
+export {
   ANVIL_INPUT_PER_OUTPUT,
   DEFAULT_MAX_IMPLIED_MERGE_RATIO,
   MIN_MERGE_LEVEL,

@@ -284,6 +284,28 @@ scan exists to evaluate. Now a per-tag latest price over a 48h lookback.
 - Seed anvil recipes for every family, all `verified = 0`
 
 ### Part C — weekly bands
+**Status: core + per-tag endpoint DONE 2026-08-26**, deployed `86ef7dcb`. 336 tests green.
+`packages/core/src/bands.ts` and `GET /api/bands/:tag?days=&pLow=&pHigh=`. Confirmed no
+migration was needed — `hourly` already carries `bid_min/avg/max` and `ask_min/avg/max`.
+
+The sides test was written before the implementation and mutation-verified: flipping the
+two percentile lines fails 12 tests, three of them named for the inversion. A second
+mutation (touch tested against `bidMax` instead of `bidMin`) fails 2.
+
+**Part C is now complete**, deployed `2c19cf17`. `GET /api/bands` ranks every Tier A tag
+best-to-worst by profit/day, precomputed to `bands:default:v1` by the hourly cron and
+served as a single KV read on default parameters.
+
+The budget problem is solved by streaming, not by cutting scope. Rows are pulled in bulk
+pages `ORDER BY tag` and each tag's band is finalized the moment the tag changes, so the
+cost is `rows / page size` (~14 pages) rather than 793 queries, and resident memory is one
+tag's 168 bars rather than 133k objects. `pageSize` is injectable so the pagination is
+genuinely tested with small pages.
+
+Ranking is volume-and-feasibility-adjusted, never spread alone: profit/day is net-per-unit
+(tax on the sell leg only) times daily flow on the binding side, times capture, times the
+LIMITING hit-rate — both legs must fill, so a wide band nobody's order reaches is worth
+zero per day rather than a lot.
 
 - `packages/core/src/bands.ts` — trailing-window percentile bands plus hit-rate
 - `GET /api/bands/:tag?days=&pLow=&pHigh=` — buy band, sell band, hit counts, week count

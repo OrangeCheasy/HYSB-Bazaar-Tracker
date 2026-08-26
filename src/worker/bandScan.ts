@@ -5,6 +5,7 @@ import {
   DEFAULT_HIGH_PERCENTILE,
   DEFAULT_LOW_PERCENTILE,
   DEFAULT_WINDOW_DAYS,
+  type BandScanPayload,
   type BandScanRow,
   type Bar,
   type BandMarket,
@@ -193,11 +194,17 @@ export async function runBandScan(
 }
 
 /** KV key for the precomputed default band scan. Versioned like the craft scan, so a
- *  payload shape change ships without a migration — an old key just falls out of use. */
-export const BAND_SCAN_KV_KEY = "bands:default:v1";
+ *  payload shape change ships without a migration — an old key just falls out of use.
+ *
+ *  v2 carries `skipped` alongside the rows. The v1 key is simply abandoned rather than
+ *  migrated: the next precompute run writes v2, and until it does `/api/bands` falls
+ *  through to a live D1 scan, which is correct if slower. */
+export const BAND_SCAN_KV_KEY = "bands:default:v2";
 
-export interface BandScanPayload {
-  readonly data: readonly BandScanRow[];
+/** The envelope as stored in KV — served to the client byte for byte, meta included, so a
+ *  stopped cron shows a `staleAfter` in the past instead of a silently refreshed one. */
+export interface StoredBandScan {
+  readonly data: BandScanPayload;
   readonly meta: {
     readonly generatedAt: number;
     readonly staleAfter: number;
@@ -207,8 +214,8 @@ export interface BandScanPayload {
 
 export async function precomputeBandScan(env: Env, now: number): Promise<number> {
   const result = await runBandScan(env.DB, DEFAULT_BAND_SCAN_PARAMS, now);
-  const payload: BandScanPayload = {
-    data: result.rows,
+  const payload: StoredBandScan = {
+    data: { rows: result.rows, skipped: result.skipped },
     meta: {
       generatedAt: result.dataTo,
       // Bands move only when a new hour lands, so this is stale once the next hourly

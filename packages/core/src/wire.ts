@@ -73,11 +73,26 @@ export interface CraftRow {
   readonly error?: string;
 }
 
-/** GET /api/bands — one row per tag, ranked. */
+/** One row of the ranked band scan. */
 export interface BandScanRow {
   readonly tag: string;
   readonly band: WeeklyBand;
   readonly economics: BandEconomics;
+}
+
+/**
+ * GET /api/bands — the ranked rows, plus why the tags that are missing are missing.
+ *
+ * `skipped` counts tags that had hourly rows but could not produce a band, keyed by
+ * reason. It is part of the answer rather than diagnostics: for the first month of this
+ * site's life the honest response to "where are the bands" is "793 tags are still short of
+ * the 24 hourly rows a band needs", and an empty list with no explanation cannot say that.
+ * A view rendering an empty table has no other way to tell "nothing qualifies yet" from
+ * "something is broken".
+ */
+export interface BandScanPayload {
+  readonly rows: readonly BandScanRow[];
+  readonly skipped: Readonly<Record<string, number>>;
 }
 
 /** GET /api/bands/:tag */

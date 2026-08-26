@@ -1,6 +1,6 @@
 import type {
   BandPayload,
-  BandScanRow,
+  BandScanPayload,
   ChartPoint,
   CraftRow,
   HealthPayload,
@@ -40,7 +40,7 @@ export function fetchStatus(signal?: AbortSignal): Promise<ApiResult<StatusPaylo
 export function fetchBands(
   settings: Settings,
   signal?: AbortSignal,
-): Promise<ApiResult<readonly BandScanRow[]>> {
+): Promise<ApiResult<BandScanPayload>> {
   return apiGet(`/api/bands${queryString(toBandQuery(settings))}`, signal);
 }
 

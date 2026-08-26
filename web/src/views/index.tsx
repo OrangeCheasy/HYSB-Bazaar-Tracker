@@ -7,22 +7,6 @@ import { Placeholder } from "./Placeholder.js";
  * band never without its hit-rate (CLAUDE.md §7.6, ROADMAP Phase 5).
  */
 
-export function BandsView(): React.JSX.Element {
-  return (
-    <Placeholder title="Weekly bands">
-      <p>
-        The landing view, and the reason the site exists: where to rest a buy order and a sell
-        offer on each tag, with the spread after tax.
-      </p>
-      <p>
-        Every band ships with its hit-rate — how often price actually reached it. By
-        construction a p10 buy order sits unfilled most of the time, so a band nobody's order
-        touches is a chart annotation, not a trade.
-      </p>
-    </Placeholder>
-  );
-}
-
 export function BandDetailView(): React.JSX.Element {
   const { tag } = useParams();
   return (

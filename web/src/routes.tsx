@@ -1,8 +1,8 @@
 import { createBrowserRouter } from "react-router";
 import { Layout } from "./app/Layout.js";
+import { BandsView } from "./views/BandsView.js";
 import {
   BandDetailView,
-  BandsView,
   CraftDetailView,
   ItemDetailView,
   ItemsView,

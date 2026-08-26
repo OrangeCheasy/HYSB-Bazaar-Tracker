@@ -151,6 +151,7 @@ export {
 
 export type {
   BandPayload,
+  BandScanPayload,
   BandScanRow,
   ChartPoint,
   CraftRow,

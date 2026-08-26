@@ -20,7 +20,7 @@ export default defineConfig({
       // web/ ships one test file: the settings schema, deliberately kept DOM-free so it
       // runs here in node rather than needing a jsdom environment and testing-library
       // for what is really validation and unit-conversion logic.
-      "web/src/**/*.test.ts",
+      "web/src/**/*.test.{ts,tsx}",
     ],
     coverage: {
       // packages/core is the only place coverage actually matters — it is the pure

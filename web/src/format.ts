@@ -55,3 +55,18 @@ export function formatPercent(fraction: number, digits = 1): string {
   if (!Number.isFinite(fraction)) return "—";
   return `${(fraction * 100).toFixed(digits)}%`;
 }
+
+/**
+ * For values that are ALREADY percentage points rather than fractions.
+ *
+ * Core is not consistent about this and the two live one file apart: `Stats.spreadPct` is
+ * a fraction (`(ask - bid) / ask`), while `WeeklyBand.spreadPct` and
+ * `BandEconomics.marginPct` are multiplied by 100 at the source. Passing a band's 10.48
+ * through `formatPercent` renders "1047.8%", which looks like a spectacular find rather
+ * than a units mistake — exactly the class of error CLAUDE.md §8 warns about, arriving
+ * through the display layer instead of the model.
+ */
+export function formatPercentPoints(points: number, digits = 1): string {
+  if (!Number.isFinite(points)) return "—";
+  return `${points.toFixed(digits)}%`;
+}

@@ -9,6 +9,7 @@ import {
   normalizeMany,
   type BandParamName,
   type BandPayload,
+  type BandScanPayload,
 } from "@core/index.js";
 import type { Env } from "../index.js";
 import { BAND_SCAN_KV_KEY, DEFAULT_BAND_SCAN_PARAMS, runBandScan } from "../bandScan.js";
@@ -151,8 +152,11 @@ export async function handleBandScan(url: URL, env: Env): Promise<Response> {
     { ...DEFAULT_BAND_SCAN_PARAMS, ...params.value },
     now,
   );
+  // Same shape as the KV path, `skipped` included: a client must not have to know which
+  // path served it in order to explain an empty table.
+  const payload: BandScanPayload = { rows: result.rows, skipped: result.skipped };
   return json(
-    result.rows,
+    payload,
     { generatedAt: result.dataTo, staleAfter: result.dataTo + 3600, source: "d1" },
     200,
     "public, max-age=300",

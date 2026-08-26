@@ -1,4 +1,4 @@
-import type { RawHourlyRow } from "@core/index.js";
+import type { ChartPoint, RawHourlyRow } from "@core/index.js";
 
 /**
  * Read-side queries for the API layer (Phase 4). Everything here returns rows shaped
@@ -28,16 +28,10 @@ export async function selectHourlyBarsForTag(
   return results;
 }
 
-export interface ChartPoint {
-  readonly ts: number;
-  readonly askAvg: number;
-  readonly askMin: number;
-  readonly askMax: number;
-  readonly bidAvg: number;
-  readonly bidMin: number;
-  readonly bidMax: number;
-  readonly samples: number;
-}
+/** Display shape for `/api/item/:tag/history`, declared in packages/core/src/wire.ts —
+ *  the SQL aliases below produce it and the chart component consumes it, so it is a wire
+ *  type rather than a query-layer one. */
+export type { ChartPoint };
 
 /** For `/api/item/:tag/history?range=1d|7d|30d|90d`. No core involvement — this is
  *  display data, not a calculation, so SQL aliases do the whole shape. */

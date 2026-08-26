@@ -452,10 +452,7 @@ export function aggregate(
  * (an hour built from 2 snapshots must not out-vote one built from 12). Kept here for the
  * same reason aggregate() is: src/worker/rollup.ts should be nothing but SQL and plumbing.
  */
-export function aggregateBars(
-  bars: readonly Bar[],
-  intervalSeconds: number,
-): readonly Bar[] {
+export function aggregateBars(bars: readonly Bar[], intervalSeconds: number): readonly Bar[] {
   if (intervalSeconds <= 0 || bars.length === 0) return [];
 
   const buckets = new Map<number, Bar[]>();

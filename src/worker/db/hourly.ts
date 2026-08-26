@@ -106,7 +106,9 @@ export function buildHourlyReplaceUpsert(
   rows: readonly HourlyReplaceRow[],
 ): D1PreparedStatement[] {
   return chunkByParamCount(rows, REPLACE_PARAMS_PER_ROW).map((chunk) => {
-    const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const placeholders = chunk
+      .map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .join(", ");
     const sql = `
       INSERT INTO hourly (
         tag, hour_ts, ask_avg, ask_min, ask_max, bid_avg, bid_min, bid_max,

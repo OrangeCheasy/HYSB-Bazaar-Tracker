@@ -1,18 +1,18 @@
 import {
+  BAND_PARAM_RANGES,
   DEFAULT_HIGH_PERCENTILE,
   DEFAULT_LOW_PERCENTILE,
   DEFAULT_WINDOW_DAYS,
+  checkParam,
   computeBand,
   normalizeHourlyRow,
   normalizeMany,
-  type WeeklyBand,
+  type BandParamName,
+  type BandPayload,
+  type BandScanPayload,
 } from "@core/index.js";
 import type { Env } from "../index.js";
-import {
-  BAND_SCAN_KV_KEY,
-  DEFAULT_BAND_SCAN_PARAMS,
-  runBandScan,
-} from "../bandScan.js";
+import { BAND_SCAN_KV_KEY, DEFAULT_BAND_SCAN_PARAMS, runBandScan } from "../bandScan.js";
 import { selectHourlyBarsForTag } from "../db/history.js";
 import { errorResponse, json } from "./index.js";
 
@@ -31,11 +31,9 @@ export interface BandQueryParams {
   readonly highPercentile: number;
 }
 
-export const BAND_PARAM_RANGES = {
-  days: { min: 1, max: 30, hint: "a trailing window in days, 1-30" },
-  pLow: { min: 0, max: 1, hint: "a percentile as a fraction, so p10 is 0.1" },
-  pHigh: { min: 0, max: 1, hint: "a percentile as a fraction, so p90 is 0.9" },
-} as const;
+/** Ranges live in packages/core/src/params.ts so the settings drawer validates `pLow`
+ *  and `pHigh` against the identical table these rejections are written from. */
+export { BAND_PARAM_RANGES };
 
 export type BandParamResult =
   | { readonly ok: true; readonly value: BandQueryParams }
@@ -47,23 +45,14 @@ export type BandParamResult =
  * confident band built from the maximum instead of the tenth percentile.
  */
 export function parseBandParams(url: URL): BandParamResult {
-  const read = (
-    name: keyof typeof BAND_PARAM_RANGES,
-    fallback: number,
-  ): number | { message: string } => {
-    const raw = url.searchParams.get(name);
-    if (raw === null) return fallback;
-    const value = Number(raw);
-    const range = BAND_PARAM_RANGES[name];
-    if (!Number.isFinite(value)) {
-      return { message: `'${name}' must be a number (${range.hint}); got '${raw}'` };
-    }
-    if (value < range.min || value > range.max) {
-      return {
-        message: `'${name}' must be between ${range.min} and ${range.max} — ${range.hint}; got ${value}`,
-      };
-    }
-    return value;
+  const read = (name: BandParamName, fallback: number): number | { message: string } => {
+    const checked = checkParam(
+      name,
+      BAND_PARAM_RANGES[name],
+      url.searchParams.get(name),
+      fallback,
+    );
+    return checked.ok ? checked.value : { message: checked.message };
   };
 
   const windowDays = read("days", DEFAULT_WINDOW_DAYS);
@@ -83,9 +72,9 @@ export function parseBandParams(url: URL): BandParamResult {
   return { ok: true, value: { windowDays, lowPercentile, highPercentile } };
 }
 
-export interface BandPayload extends WeeklyBand {
-  readonly tag: string;
-}
+/** A band plus the tag it belongs to. Declared in packages/core/src/wire.ts so the band
+ *  detail view reads the same type this route writes. */
+export type { BandPayload };
 
 export async function handleBands(tag: string, url: URL, env: Env): Promise<Response> {
   if (tag === "") return errorResponse("missing tag", 400);
@@ -106,7 +95,8 @@ export async function handleBands(tag: string, url: URL, env: Env): Promise<Resp
     lowPercentile: params.value.lowPercentile,
     highPercentile: params.value.highPercentile,
   });
-  if (!result.ok) return errorResponse(`cannot compute a band for '${tag}': ${result.error}`, 422);
+  if (!result.ok)
+    return errorResponse(`cannot compute a band for '${tag}': ${result.error}`, 422);
 
   // Freshness is the newest bar we actually used, never Date.now() — the same rule the
   // craft routes follow. A band computed from a stale series must not claim to be fresh.
@@ -162,8 +152,11 @@ export async function handleBandScan(url: URL, env: Env): Promise<Response> {
     { ...DEFAULT_BAND_SCAN_PARAMS, ...params.value },
     now,
   );
+  // Same shape as the KV path, `skipped` included: a client must not have to know which
+  // path served it in order to explain an empty table.
+  const payload: BandScanPayload = { rows: result.rows, skipped: result.skipped };
   return json(
-    result.rows,
+    payload,
     { generatedAt: result.dataTo, staleAfter: result.dataTo + 3600, source: "d1" },
     200,
     "public, max-age=300",

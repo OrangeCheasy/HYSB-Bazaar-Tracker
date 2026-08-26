@@ -6,7 +6,11 @@ import {
   sliceWindow,
   type Stats,
 } from "@core/index.js";
-import { selectDailyChartSeries, selectHourlyBarsForTag, selectHourlyChartSeries } from "../db/history.js";
+import {
+  selectDailyChartSeries,
+  selectHourlyBarsForTag,
+  selectHourlyChartSeries,
+} from "../db/history.js";
 import type { Env } from "../index.js";
 import { errorResponse, json, type Meta } from "./index.js";
 
@@ -32,8 +36,16 @@ export async function handleItemStats(tag: string, env: Env): Promise<Response> 
   const { ok: bars } = normalizeMany(rows, normalizeHourlyRow);
   if (bars.length === 0) return errorResponse(`no data for tag '${tag}'`, 404);
 
-  const windows: Record<"1d" | "7d" | "30d", Stats | null> = { "1d": null, "7d": null, "30d": null };
-  for (const [key, days] of [["1d", 1], ["7d", 7], ["30d", 30]] as const) {
+  const windows: Record<"1d" | "7d" | "30d", Stats | null> = {
+    "1d": null,
+    "7d": null,
+    "30d": null,
+  };
+  for (const [key, days] of [
+    ["1d", 1],
+    ["7d", 7],
+    ["30d", 30],
+  ] as const) {
     const result = computeStats(sliceWindow(bars, now - days * DAY, now));
     windows[key] = result.ok ? result.value : null;
   }
@@ -59,7 +71,10 @@ const RANGE_TO_SECONDS: Readonly<Record<string, number>> = {
   "90d": 90 * DAY,
 };
 
-function respondHistory(points: readonly { readonly ts: number }[], source: Meta["source"]): Response {
+function respondHistory(
+  points: readonly { readonly ts: number }[],
+  source: Meta["source"],
+): Response {
   const now = Math.floor(Date.now() / 1000);
   const generatedAt = latestTs(points) ?? now;
   return json(

@@ -47,28 +47,72 @@
     { "base": "PORK", "enchanted": "ENCHANTED_PORK", "ratio": 160 },
     { "base": "RAW_CHICKEN", "enchanted": "ENCHANTED_RAW_CHICKEN", "ratio": 160 },
 
-    { "base": "ENDER_PEARL", "enchanted": "ENCHANTED_ENDER_PEARL", "ratio": 20,
-      "note": "exception: ender pearls stack to 16, so the recipe is 20 not 160" },
-    { "base": "EGG", "enchanted": "ENCHANTED_EGG", "ratio": 144,
-      "note": "exception: 144, not 160" },
-    { "base": "HARD_STONE", "enchanted": "ENCHANTED_HARD_STONE", "ratio": 576,
-      "note": "exception: 576" },
+    {
+      "base": "ENDER_PEARL",
+      "enchanted": "ENCHANTED_ENDER_PEARL",
+      "ratio": 20,
+      "note": "exception: ender pearls stack to 16, so the recipe is 20 not 160"
+    },
+    {
+      "base": "EGG",
+      "enchanted": "ENCHANTED_EGG",
+      "ratio": 144,
+      "note": "exception: 144, not 160"
+    },
+    {
+      "base": "HARD_STONE",
+      "enchanted": "ENCHANTED_HARD_STONE",
+      "ratio": 576,
+      "note": "exception: 576"
+    },
 
-    { "base": "ENCHANTED_COAL", "enchanted": "ENCHANTED_COAL_BLOCK", "ratio": 160,
-      "note": "tier 2 craft" },
-    { "base": "ENCHANTED_IRON", "enchanted": "ENCHANTED_IRON_BLOCK", "ratio": 160,
-      "note": "tier 2 craft" },
-    { "base": "ENCHANTED_GOLD", "enchanted": "ENCHANTED_GOLD_BLOCK", "ratio": 160,
-      "note": "tier 2 craft" },
-    { "base": "ENCHANTED_DIAMOND", "enchanted": "ENCHANTED_DIAMOND_BLOCK", "ratio": 160,
-      "note": "tier 2 craft" },
-    { "base": "ENCHANTED_REDSTONE", "enchanted": "ENCHANTED_REDSTONE_BLOCK", "ratio": 160,
-      "note": "tier 2 craft" },
-    { "base": "ENCHANTED_EMERALD", "enchanted": "ENCHANTED_EMERALD_BLOCK", "ratio": 160,
-      "note": "tier 2 craft" },
-    { "base": "ENCHANTED_LAPIS_LAZULI", "enchanted": "ENCHANTED_LAPIS_BLOCK", "ratio": 160,
-      "note": "tier 2 craft" },
-    { "base": "ENCHANTED_QUARTZ", "enchanted": "ENCHANTED_QUARTZ_BLOCK", "ratio": 160,
-      "note": "tier 2 craft" }
+    {
+      "base": "ENCHANTED_COAL",
+      "enchanted": "ENCHANTED_COAL_BLOCK",
+      "ratio": 160,
+      "note": "tier 2 craft"
+    },
+    {
+      "base": "ENCHANTED_IRON",
+      "enchanted": "ENCHANTED_IRON_BLOCK",
+      "ratio": 160,
+      "note": "tier 2 craft"
+    },
+    {
+      "base": "ENCHANTED_GOLD",
+      "enchanted": "ENCHANTED_GOLD_BLOCK",
+      "ratio": 160,
+      "note": "tier 2 craft"
+    },
+    {
+      "base": "ENCHANTED_DIAMOND",
+      "enchanted": "ENCHANTED_DIAMOND_BLOCK",
+      "ratio": 160,
+      "note": "tier 2 craft"
+    },
+    {
+      "base": "ENCHANTED_REDSTONE",
+      "enchanted": "ENCHANTED_REDSTONE_BLOCK",
+      "ratio": 160,
+      "note": "tier 2 craft"
+    },
+    {
+      "base": "ENCHANTED_EMERALD",
+      "enchanted": "ENCHANTED_EMERALD_BLOCK",
+      "ratio": 160,
+      "note": "tier 2 craft"
+    },
+    {
+      "base": "ENCHANTED_LAPIS_LAZULI",
+      "enchanted": "ENCHANTED_LAPIS_BLOCK",
+      "ratio": 160,
+      "note": "tier 2 craft"
+    },
+    {
+      "base": "ENCHANTED_QUARTZ",
+      "enchanted": "ENCHANTED_QUARTZ_BLOCK",
+      "ratio": 160,
+      "note": "tier 2 craft"
+    }
   ]
 }

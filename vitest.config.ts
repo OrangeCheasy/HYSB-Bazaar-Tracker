@@ -14,7 +14,14 @@ export default defineConfig({
     // src/worker tests are unit tests over pure logic (tier assignment, param-count
     // chunking, SQL builders) run against fake D1 stubs — not live-D1 integration tests.
     // Those live in scripts/db-smoke.sh against a real local SQLite engine instead.
-    include: ["packages/core/test/**/*.test.ts", "src/worker/**/*.test.ts"],
+    include: [
+      "packages/core/test/**/*.test.ts",
+      "src/worker/**/*.test.ts",
+      // web/ ships one test file: the settings schema, deliberately kept DOM-free so it
+      // runs here in node rather than needing a jsdom environment and testing-library
+      // for what is really validation and unit-conversion logic.
+      "web/src/**/*.test.{ts,tsx}",
+    ],
     coverage: {
       // packages/core is the only place coverage actually matters — it is the pure
       // domain layer, and the one part of this project worth reusing elsewhere. Worker

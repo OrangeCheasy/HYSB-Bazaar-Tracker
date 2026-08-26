@@ -120,7 +120,10 @@ describe("deriving families from a product list", () => {
   /** A brand-new enchant must work with no code change — there is no enchant map to
    *  update. This is the same discipline tier assignment follows (CLAUDE.md section 2). */
   it("handles an enchant it has never seen", () => {
-    const fams = deriveFamilies(["ENCHANTMENT_TOTALLY_NEW_THING_1", "ENCHANTMENT_TOTALLY_NEW_THING_2"]);
+    const fams = deriveFamilies([
+      "ENCHANTMENT_TOTALLY_NEW_THING_1",
+      "ENCHANTMENT_TOTALLY_NEW_THING_2",
+    ]);
     expect(fams).toHaveLength(1);
     expect(fams[0]).toMatchObject({ family: "ENCHANTMENT_TOTALLY_NEW_THING", maxLevel: 2 });
   });

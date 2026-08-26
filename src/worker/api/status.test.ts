@@ -44,7 +44,13 @@ describe("handleStatus — stale data", () => {
       db_size_bytes: null,
       error: null,
     };
-    const rowCounts: RowCounts = { products: 2136, snapshots: 1000, hourly: 1600, daily: 0, recipes: 42 };
+    const rowCounts: RowCounts = {
+      products: 2136,
+      snapshots: 1000,
+      hourly: 1600,
+      daily: 0,
+      recipes: 42,
+    };
 
     const db = makeQueuedFakeD1({
       all: [latestPerKindRows],

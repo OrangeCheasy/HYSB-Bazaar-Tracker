@@ -1,6 +1,9 @@
+import type { RunKind } from "@core/index.js";
 import type { Env } from "../index.js";
 
-export type RunKind = "ingest" | "rollup" | "prune" | "precompute";
+/** The four cron kinds. Declared in packages/core/src/wire.ts because `/api/status`
+ *  keys its `runs` object by it, so the client needs the same union. */
+export type { RunKind };
 
 export interface RunResult {
   productsSeen?: number;

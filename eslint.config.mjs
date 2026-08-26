@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import globals from "globals";
+import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
@@ -46,15 +47,43 @@ export default tseslint.config(
     },
   },
 
+  // The rules of hooks are not style — a missing dependency here is a stale closure
+  // serving numbers from the previous settings, which on this site means showing a margin
+  // computed at a tax rate the user has already changed.
+  { ...reactHooks.configs.flat["recommended-latest"], files: ["web/src/**/*.{ts,tsx}"] },
+
   {
-    files: ["web/**/*.{ts,tsx}"],
+    // `web/src` only — `web/vite.config.ts` is build tooling that runs in node, and gets
+    // its own block below.
+    files: ["web/src/**/*.{ts,tsx}"],
     languageOptions: {
       globals: globals.browser,
+    },
+    rules: {
+      // The mirror of the packages/core rule above, and the reason the wire types live in
+      // core at all: web/ may not reach into the Worker. Anything both sides need is a
+      // plain type in packages/core (CLAUDE.md §4).
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/src/worker/*", "../../src/*"],
+              message:
+                "web/ must not import Worker code. Shared types belong in packages/core (see wire.ts).",
+            },
+            {
+              group: ["cloudflare:*", "node:*"],
+              message: "web/ runs in a browser.",
+            },
+          ],
+        },
+      ],
     },
   },
 
   {
-    files: ["scripts/**/*.ts"],
+    files: ["scripts/**/*.{ts,mjs}", "web/vite.config.ts", "*.config.{ts,mjs}"],
     languageOptions: {
       globals: globals.node,
     },

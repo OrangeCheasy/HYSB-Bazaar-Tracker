@@ -1,7 +1,9 @@
+import type { Meta } from "@core/index.js";
 import type { Env } from "../index.js";
 import { handleBandScan, handleBands } from "./bands.js";
 import { handleCraft } from "./craft.js";
 import { handleItemHistory, handleItemHours, handleItemStats } from "./item.js";
+import { handleProducts } from "./products.js";
 import { handleRecipes } from "./recipes.js";
 import { handleScan } from "./scan.js";
 import { handleStatus } from "./status.js";
@@ -9,14 +11,13 @@ import { handleStatus } from "./status.js";
 /**
  * Standard response envelope. Every payload states how old it is — users making trades
  * on 40-minute-old data need to know that. See CLAUDE.md §5.
+ *
+ * Declared in `packages/core/src/wire.ts` and re-exported here so this module stays the
+ * one place worker code imports it from. The web client imports the same type from core
+ * directly: `web/` cannot reach into `src/worker/`, and a second hand-written copy of the
+ * envelope over there would drift the first time a field is added on one side only.
  */
-export interface Meta {
-  /** UTC epoch seconds the underlying data was generated. */
-  generatedAt: number;
-  /** UTC epoch seconds after which this payload should be considered stale. */
-  staleAfter: number;
-  source: "kv" | "d1" | "worker";
-}
+export type { Meta };
 
 /**
  * `cacheControl` has no default on purpose: every route below sets one deliberately,
@@ -116,6 +117,10 @@ export async function handleApi(
 
   if (segments.length === 2 && segments[1] === "bands") {
     return handleBandScan(url, env);
+  }
+
+  if (segments.length === 2 && segments[1] === "products") {
+    return handleProducts(env);
   }
 
   if (segments.length === 2 && segments[1] === "recipes") {

@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/**
+ * Trading terminal, not dashboard.
+ *
+ * Near-black ground, hairline rules doing all the structural work — no cards, no
+ * shadows, no rounded panels. Density comes from short rows and tight leading; colour is
+ * spent only on meaning (profit, loss, warning, staleness), never on decoration, so a
+ * warning is the only saturated thing on screen and cannot be missed.
+ *
+ * Dark by default and dark-only for now, but every colour is a semantic token rather than
+ * a literal, so a light theme later is a token swap in the `[data-theme="light"]` block
+ * below rather than a rewrite of every component.
+ */
+@theme {
+  --color-ground: #0b0d10;
+  --color-surface: #101318;
+  --color-raised: #161a20;
+  --color-rule: #1e232a;
+  --color-rule-strong: #2b323b;
+
+  /* Every one of these is checked against both --color-ground and --color-surface at WCAG
+     AA for small text (4.5:1), because all three get used at 10-12px in a dense table.
+     `ink-faint` was #6c7683 and measured 4.22:1 — close enough to look fine and still fail,
+     which is exactly how a contrast bug survives a design review. Ratios now: ink 15.9,
+     ink-dim 8.4, ink-faint 5.1. */
+  --color-ink: #e6e8eb;
+  --color-ink-dim: #a2abb6;
+  --color-ink-faint: #7a8492;
+
+  /* Semantic only. A number is green because it is a profit, never because green looks
+     good in a table. */
+  --color-profit: #4ade80;
+  --color-loss: #f87171;
+  --color-warn: #fbbf24;
+  --color-accent: #38bdf8;
+
+  /* Freshness has three states and they are load-bearing (CLAUDE.md §3b): fresh, late,
+     and an outage a user must not trade on. */
+  --color-fresh: #4ade80;
+  --color-late: #fbbf24;
+  --color-outage: #f87171;
+
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", "Roboto Mono", monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Hook for a future light theme. Empty on purpose — see the note above; its existence is
+   what keeps components from hardcoding a dark literal. */
+:root[data-theme="light"] {
+  /* not implemented yet */
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100dvh;
+  }
+
+  body {
+    background: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    /* Tighter than Tailwind's 1.5 default: this is a table-first site and 1.5 wastes
+       vertical space that rows should be using. */
+    line-height: 1.35;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /**
+   * Every number on this site is tabular. Digits must align down a column so magnitude is
+   * readable as column width — proportional digits make a 12-row price column unscannable
+   * and are the single biggest legibility loss in a dense table.
+   */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  a {
+    color: var(--color-accent);
+    text-underline-offset: 0.2em;
+  }
+
+  a:hover {
+    text-decoration: underline;
+  }
+
+  /**
+   * A link sitting inside a sentence must be distinguishable by something other than
+   * colour (WCAG 1.4.1) — a reader who cannot separate the accent from the body text has
+   * no way to see it is a link at all. Standalone links in tables and nav are exempt:
+   * their position already marks them, and underlining every tag in a 200-row table would
+   * turn the column into noise.
+   */
+  p a {
+    text-decoration: underline;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}

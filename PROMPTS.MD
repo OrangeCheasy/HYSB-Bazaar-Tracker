@@ -4,15 +4,15 @@ Copy-paste prompts for Claude Code, one per phase. `CLAUDE.md` loads automatical
 these deliberately do **not** repeat the architecture — restating it wastes context and
 invites contradictions between two sources of truth.
 
-Prompts for phases 0, 0.5, 1, 2 and 4 have been deleted — that work is built, deployed and
-verified in production. What remains below is what has not been built.
+Prompts for phases 0, 0.5, 1, 2, 4 and 4.5 have been deleted — that work is built, deployed
+and verified in production. What remains below is what has not been built.
 
 ## How to run these well
 
 - **One phase per session.** Start a fresh session between phases; `/clear` when a phase
   is done. Long sessions accumulate stale context and the model starts optimizing for
   things you fixed an hour ago.
-- **Ask for a plan first on the big phases** (5, 6). Read the plan, correct it, *then*
+- **Ask for a plan first on the big phases** (5, 6). Read the plan, correct it, _then_
   say build. Correcting a plan costs one message; correcting an implementation costs an
   evening.
 - **Commit at every checkpoint.** These prompts mark them. A checkpoint you can revert to
@@ -74,86 +74,6 @@ minute run and I want to know that before it starts.
 
 ---
 
-## Phase 4.5 — Weekly bands and anvil merges
-
-Three sessions, in this order. Part A is a hard dependency of both others — don't reorder.
-
-Session A — the conversion graph:
-```
-Build packages/core/src/convert.ts per docs/ROADMAP.md Phase 4.5 Part A.
-
-A recipe becomes an edge in a graph and the question becomes "cheapest path
-to one unit of the output". Generic over edges — do NOT special-case anvils
-or compaction. Three callers depend on it: anvil level chains, tier-2
-compaction, and whatever we add later.
-
-Pure core module, no I/O, no platform imports.
-
-Prove it on the bug it exists to fix: SUGAR_CANE -> ENCHANTED_SUGAR_CANE is
-currently seeded as a single 160:1 recipe and reports a ~3,000% margin in
-production. The real path goes through ENCHANTED_SUGAR. Write a test that
-prices both the one-step and two-step interpretations and asserts the
-solver picks the cheaper real path.
-
-Before writing code, show me the type signature you're proposing for an
-edge and for the solver result. I want to check it can express a 2^k anvil
-chain and a 160:1 compaction step without a discriminated union at every
-call site.
-```
-
-Session B — anvil merges:
-```
-Build packages/core/src/anvil.ts and the recipes migration per
-docs/ROADMAP.md Phase 4.5 Part B. Read CLAUDE.md section 8's anvil
-subsection first — the domain rules are there.
-
-Key facts you must not re-derive incorrectly:
-- Two books of the same enchant at level N make one at level N+1, so going
-  from L to M costs 2^(M-L) books. Sharpness 1 -> 7 is 64 books, not 6.
-- Every intermediate level is itself tradeable, so entering at level 3 is
-  often cheaper than at level 1. Use the Part A solver to pick.
-- Derive each family's level range from the live product list. No hardcoded
-  enchant map — new enchants must work without a code change.
-- Anvil coin/XP cost is UNVERIFIED. Model it as an input defaulting to
-  zero, not a hardcoded constant, and flag it in the output.
-
-The migration adds a `kind` discriminator to recipes ('compact' | 'anvil').
-Forward-only, numbered. Seed every anvil recipe with verified = 0.
-
-Tell me before you start how many recipe rows this seeds and what that does
-to the scan's row count.
-```
-
-Session C — weekly bands:
-```
-Build packages/core/src/bands.ts and the band endpoints per
-docs/ROADMAP.md Phase 4.5 Part C. Read CLAUDE.md section 8's weekly band
-subsection first.
-
-Write the sides test BEFORE the implementation. A buy order competes at bid
-and a sell offer competes at ask (CLAUDE.md section 1). Building the low
-band from the ask side inverts the entire strategy and produces orders that
-never fill — that is the most likely bug in this work and I want a test
-that fails loudly if anyone ever flips it.
-
-Use percentiles, not MIN/MAX: p10 of hourly bid_avg for the buy band, p90
-of hourly ask_avg for the sell band, both user-adjustable. A single 5-minute
-wick is not a price anyone can transact at.
-
-Every band ships with its hit-rate — how many hours in the window actually
-touched it, and how often both sides were touched in the same week. A band
-without a hit-rate is not shippable. Also return the week count: the 30-day
-cap means it is at most 4, and any multi-week claim has to show that n.
-
-hourly already has bid_min/bid_avg/bid_max and ask_min/ask_avg/ask_max, so
-this needs no schema change. Confirm that before assuming a migration.
-```
-
-**Checkpoint per session:** `npm test` and `npm run typecheck` both clean, and for
-session C, the inverted-sides test genuinely fails when you flip the band derivation.
-
----
-
 ## Phase 5 — Frontend
 
 Split this across sessions — one view per session. Don't ask for the whole SPA at once;
@@ -161,6 +81,7 @@ the output gets long, quality drops, and reviewing 2,000 lines of unfamiliar Rea
 sitting is how bugs get merged.
 
 Session 5a — shell:
+
 ```
 Set up the Vite + React + TS + Tailwind app in web/ with routing, the
 settings drawer (tax, capture, band percentiles, sleep window, timezone —
@@ -177,6 +98,7 @@ header.
 ```
 
 Session 5b — band table (the landing view):
+
 ```
 Build the band table view and make it the landing route. Per tag: buy band,
 sell band, spread after tax, and the hit-rate for each side. Sortable,
@@ -197,6 +119,7 @@ horizontally scrolling tables are usually the wrong answer.
 ```
 
 Session 5c — scan table:
+
 ```
 Build the craft scan table view. Sortable, ranked by profit/day by default,
 filterable by available capital. Craft type (compaction vs anvil) is a
@@ -213,6 +136,7 @@ table implementation.
 ```
 
 Session 5d — detail views + charts:
+
 ```
 Build the band detail and craft detail views.
 
@@ -233,6 +157,39 @@ The flag explanations matter more than the chart. "deep buy-order queue"
 means nothing to a user — write the sentence that explains what they should
 actually do about it.
 ```
+
+## Session 5e — item page
+
+```
+Build the item index and the item detail page — the last of the six views
+in docs/ROADMAP.md Phase 5.
+
+Item detail: ask/bid history with a range switch, the stats that /api/item
+already returns across 1d/7d/30d, order-book depth, volume and volatility.
+Depth metrics are computed at ingest and stored, and nothing in the UI has
+ever displayed them — surface them or tell me why they are not worth a
+column.
+
+Item index: every tracked product, searchable, so the detail page is
+reachable without knowing a tag. It does not need to be a ranked table —
+this is navigation, not analysis.
+
+Reuse DataTable and PriceChart. If either needs a new capability, add it
+there rather than working around it in the view.
+
+This page carries no trade recommendation, so the adjacency rules have
+nothing to attach to. Do not invent a margin here just to have a headline
+number. If a figure needs a caveat — a volatility computed from four days,
+a depth reading from a single snapshot — put the caveat next to it.
+
+Then close Phase 5: check the three Done-when clauses in the roadmap and
+tell me plainly which are met and which are not.
+```
+
+**Checkpoint:** all six views reachable from the nav, no horizontal overflow at
+375px (`node scripts/shoot.mjs`), Lighthouse still >=90 on the landing route.
+
+---
 
 **Checkpoint per session:** builds, typechecks, works at 375px.
 
@@ -278,12 +235,14 @@ If the honest answer is that this isn't worth it yet, say so.
 ## Prompts worth reusing at any point
 
 **Before a risky change:**
+
 ```
 Before you change anything: what could this break that isn't obviously
 related? Check whether packages/core has behaviour depending on this.
 ```
 
 **When a number looks wrong:**
+
 ```
 The scan is showing [X] for [craft] and I think it's wrong. Trace the value
 backwards from the API response through economics to the raw snapshot rows.
@@ -292,6 +251,7 @@ cause.
 ```
 
 **Periodic hygiene, roughly monthly:**
+
 ```
 Review the repo against CLAUDE.md. Where has the actual code drifted from
 the stated rules? Particularly: has anything leaked into packages/core that

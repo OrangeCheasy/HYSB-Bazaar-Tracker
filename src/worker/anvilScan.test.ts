@@ -41,7 +41,10 @@ function makeDb(seed: Seeded): Pick<D1Database, "prepare"> {
           }
           if (sql.includes("MAX(hour_ts)")) {
             return {
-              results: Object.entries(seed.bookAsks).map(([tag, ask_avg]) => ({ tag, ask_avg })),
+              results: Object.entries(seed.bookAsks).map(([tag, ask_avg]) => ({
+                tag,
+                ask_avg,
+              })),
             } as unknown as D1Result;
           }
           // Per-tag hourly series for buildCraftAnalysis.

@@ -398,7 +398,7 @@ Phase 3 (Coflnet backfill into `hourly`) was skipped to get Phase 2's cron into
 production first. Recording why, because the ordering looks like corner-cutting and
 isn't.
 
-The two data sources have opposite decay properties. Coflnet's history is *their*
+The two data sources have opposite decay properties. Coflnet's history is _their_
 archive: it is as available next month as it is today, so a month of delay costs
 nothing. Our own five-minute history exists only for the wall-clock hours our cron was
 actually running — a delayed deploy is history that no later work can recover
@@ -411,7 +411,7 @@ crafts/day, hours-to-fill, the volume sanity checks — runs off `sellMovingWeek
 arrives complete in the very first snapshot.
 
 What genuinely degrades without it is narrow: hour-of-day profiling, and the 7d/30d
-windows in `/api/item/:tag`. Both degrade *honestly* rather than silently —
+windows in `/api/item/:tag`. Both degrade _honestly_ rather than silently —
 `computeHourProfile` reports per-hour `samples` (`packages/core/src/profile.ts`), so a
 profile built from thin data reads as thin instead of being averaged into a confident
 wrong answer. That is what makes the deferral safe rather than merely convenient.
@@ -446,7 +446,7 @@ established.
 ROADMAP Phase 2 already required "a retry at the same timestamp upserts, never
 duplicates", and `buildHourlyIncrementalUpsert` already carried a `last_tick_ts <
 excluded.last_tick_ts` guard for exactly this. Wall-clock stamps defeated both: the
-second delivery arrived with a *later* timestamp, so it was never the "same timestamp"
+second delivery arrived with a _later_ timestamp, so it was never the "same timestamp"
 the invariant was written about. `snapshots` took two rows per tag per tick and
 `hourly.samples` reported 24 where the truth was 12 — the single number CLAUDE.md
 section 3b relies on to expose thin data rather than average it away.
@@ -456,7 +456,7 @@ on `(tag, ts)` and collapses via UPSERT, and the `last_tick_ts <` guard finally 
 because the repeat now carries the same value. It also makes the series evenly spaced,
 which `stats.ts` and `profile.ts` both quietly assume.
 
-**Cost:** a tick that fires *early* — before its boundary — would be attributed to the
+**Cost:** a tick that fires _early_ — before its boundary — would be attributed to the
 previous window and overwrite it. Cloudflare's scheduler runs late, not early (observed
 offsets were +4s to +12s), so this is theoretical, but it is the failure mode to look for
 if a tick ever goes missing.
@@ -491,7 +491,7 @@ ships without its caveats, and it certainly never ships computed from inputs qui
 swapped underneath it.
 
 Ranges are wider than reality (`tax` allows up to 0.5 where the real ceiling is 0.0225
-under Mayor Aura) — the job is to catch inputs wrong by a *factor*, not to second-guess
+under Mayor Aura) — the job is to catch inputs wrong by a _factor_, not to second-guess
 someone modelling an unusual scenario. `capital` is absent-vs-present rather than
 range-checked: no `capital` means "unconstrained", which is a different scan from one
 constrained to 0 coins.
@@ -533,7 +533,7 @@ Every table and the R2 archive prune at 30 days. `hourly` and `daily` were previ
 "keep indefinitely"; `snapshots` stays at 7 days, unchanged.
 
 This is a **product** decision, not a storage workaround. The site's primary feature is a
-*trailing* weekly high/low band used to place buy orders at the low and sell offers at the
+_trailing_ weekly high/low band used to place buy orders at the low and sell offers at the
 high (CLAUDE.md section 8). A price from six weeks ago is not evidence about next week's
 band, so the data was being kept for a use that does not exist. Storage was never the
 binding constraint — `hourly` was only ~231 MB/year — which is precisely why an
@@ -579,10 +579,10 @@ Ranking books by unit volume is the trap, and it is not obvious. Measured agains
 hour:
 
 | Level position | Tags | % unit volume | % coin turnover | Avg price |
-|---|---|---|---|---|
-| Lowest | 143 | 72.3% | 70.1% | 2.8M |
-| Max | 143 | **4.6%** | **21.0%** | 20.0M |
-| Intermediate | 476 | 22.9% | 7.9% | 2.0M |
+| -------------- | ---- | ------------- | --------------- | --------- |
+| Lowest         | 143  | 72.3%         | 70.1%           | 2.8M      |
+| Max            | 143  | **4.6%**      | **21.0%**       | 20.0M     |
+| Intermediate   | 476  | 22.9%         | 7.9%            | 2.0M      |
 
 Max-level books are 4.6% of units but **21% of coin turnover**, because they average 20M
 coins each against 2.8M for level 1. Any volume-ranked rule drops exactly the rung the
@@ -612,7 +612,7 @@ the same one:
 - **Anvil chains.** Two books of level N make one of level N+1, so reaching level M from
   level L costs `2^(M-L)` books — Sharpness 1 → 7 is 64 books, not 6. Every intermediate
   rung is itself tradeable, so entering at level 3 is often cheaper than at level 1. The
-  search over entry levels *is* the feature; a flat `ratio` column cannot express it.
+  search over entry levels _is_ the feature; a flat `ratio` column cannot express it.
 - **Tier-2 compaction.** `SUGAR_CANE → ENCHANTED_SUGAR → ENCHANTED_SUGAR_CANE` is a
   two-step path priced identically. Seeded as a single 160:1 step, it reported a ~3,000%
   margin and ranked **first** in production at 1.77 billion profit/day. Implied price ratio
@@ -642,7 +642,7 @@ reduced to comment-only files (a bare `SELECT 1;` to keep wrangler happy). Their
 statements are preserved verbatim in those comments. This edits migrations that have
 already been applied, which CLAUDE.md section 5 forbids.
 
-**The problem.** Both files were one-time repairs for drift on the *remote* database,
+**The problem.** Both files were one-time repairs for drift on the _remote_ database,
 caused by editing `0001` after it had been applied there. Their statements are
 unconditional `ALTER TABLE ... ADD COLUMN`, and on any clean database `0002` has already
 added every one of those columns. So a fresh chain died:
@@ -661,7 +661,7 @@ applied_at)` — name-based, with no content hash. Remote recorded both filename
 2026-08-25 and will never read them again. Verified before acting, not assumed.
 
 **Why not a squash.** Squashing `0001`–`0005` into a baseline was the other candidate and
-is the more conventional answer. It was rejected because it edits *more* applied
+is the more conventional answer. It was rejected because it edits _more_ applied
 migrations (five instead of two) and additionally requires rewriting production's
 `d1_migrations` rows by hand. Strictly more risk for the same end state. Emptying two
 provably dead files is the smaller change.
@@ -670,7 +670,7 @@ provably dead files is the smaller change.
 production across all six application tables, with the same 43 recipes and — after
 ADR-024's companion migration `0007` — the same five indexes.
 
-**What this exposed on the way.** The index sets did *not* match. Production carried
+**What this exposed on the way.** The index sets did _not_ match. Production carried
 `idx_daily_day_ts` and `idx_runs_kind_started`, which appear in no migration, and lacked
 `idx_runs_started`, which `0001` creates. Someone had created indexes directly against
 production. That is the same failure as editing a migration, pointed the other way, and it
@@ -679,7 +679,7 @@ each index against a query that exists in the code, and drops `idx_runs_started`
 query needs.
 
 **Cost.** The rule in CLAUDE.md section 5 now has a documented exception, and exceptions
-erode rules. Mitigated by stating the bar explicitly — "provably dead *and* actively breaks
+erode rules. Mitigated by stating the bar explicitly — "provably dead _and_ actively breaks
 new databases" — and by adding the replay check to section 5, so the property this rule
 exists to protect is something you can actually test instead of merely intend.
 
@@ -689,13 +689,13 @@ exists to protect is something you can actually test instead of merely intend.
 
 **Date:** 2026-08-26 · **Status:** accepted
 
-Anvil edges whose *implied merge ratio* — `price(N+1) / (2 × price(N))` — exceeds **3** are
+Anvil edges whose _implied merge ratio_ — `price(N+1) / (2 × price(N))` — exceeds **3** are
 withheld from the conversion graph (`detectMergeGates`). The family then targets the
 highest rung a merge can actually reach, rather than the highest rung the bazaar lists.
 
 **Why.** The first anvil scan ranked `ENCHANTMENT_LOOTING_4 → _5` first at **2.88 billion
 profit/day**, a 1,509% margin. The data was correct: Looting IV asks 50,000 and Looting V
-asks 172,816,195. The *model* was wrong. Looting V is not obtainable from an anvil at all —
+asks 172,816,195. The _model_ was wrong. Looting V is not obtainable from an anvil at all —
 it comes from a minigame — so the conversion the scan was pricing does not exist. Seeding
 edges from adjacent bazaar levels assumes every rung is mergeable, and that assumption is
 false for a whole class of high-tier books.
@@ -735,3 +735,46 @@ of 777 book tags, and the 295 it dropped were disproportionately the thin, high-
 rungs this scan exists to evaluate (`ENCHANTMENT_LOOTING_5` among them, which is why the
 first gate pass missed the very case that motivated it). Now a per-tag latest price over a
 48h lookback, covering all 777.
+
+---
+
+## ADR-026 — The API contract lives in packages/core, not in the Worker
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+`Meta`, `ScanRow`, `BandScanRow`, `ChartPoint`, `RowCounts`, `RunKind`, `RecipeKind` and
+the rest of the response shapes moved from `src/worker/**` into
+`packages/core/src/wire.ts`. The query-parameter ranges and defaults moved from
+`src/worker/scan.ts` and `src/worker/api/bands.ts` into `packages/core/src/params.ts`.
+The Worker imports and re-exports both from their old locations, so no call site changed.
+
+**Why.** `web/` cannot import from `src/worker/` — section 4's boundary runs both ways, and
+an ESLint rule now enforces the web half of it. That left two options for the frontend:
+hand-write a second copy of every payload type and every validation bound, or hoist them
+somewhere both sides can reach. The duplicate loses the first time a field is added on one
+side only, and it loses silently: the client keeps typechecking against its own stale copy.
+
+The parameter ranges are the sharper case. ADR-019 has the API reject an out-of-range value
+with a 400 rather than clamping it, on the grounds that a plausible-looking answer to a
+question nobody asked is worse than an error. That only holds up if the settings drawer
+cannot produce such a value — and a drawer validating against its own hand-written bounds
+would eventually let one through. Now `validate()` in `web/src/settings/schema.ts` and
+`parseScanQueryParams` in the Worker read the same table and emit the same sentence.
+
+**Why this does not violate section 4.** Nothing hoisted computes anything or touches a
+platform API. `wire.ts` is types only; `params.ts` is a const table plus a pure
+`checkParam(name, range, raw, fallback)` that takes `string | null` rather than a `URL`,
+precisely so core does not reach for a platform global. The rule core enforces is "no I/O,
+no platform imports", not "nothing the Worker also uses" — the reusability argument in
+section 4 is _for_ this direction, since a Discord bot consuming `/api/*` would want the
+same types.
+
+**One behaviour changed.** `validate()` no longer reports "the buy band must sit below the
+sell band" when a percentile is also out of range — it reports the range error alone. That
+matches `parseBandParams`, which checks ranges first and returns on the first failure.
+`pLow=10` means "the 10th percentile, written wrong"; telling the user to change the _other_
+field sends them somewhere that will not fix it.
+
+**Cost.** `packages/core` now carries types it does not itself use, which reads oddly next
+to modules that are all behaviour. Accepted: the alternative puts the same declarations in
+two trees that cannot import each other.

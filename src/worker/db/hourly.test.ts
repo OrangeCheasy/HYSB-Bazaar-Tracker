@@ -34,9 +34,7 @@ describe("buildHourlyIncrementalUpsert (Tier B)", () => {
   it("includes the idempotency guard WHERE clause on last_tick_ts", () => {
     const { db, statements } = makeFakeD1();
     buildHourlyIncrementalUpsert(db, [makeRow()]);
-    expect(statements[0]!.sql).toContain(
-      "WHERE hourly.last_tick_ts < excluded.last_tick_ts",
-    );
+    expect(statements[0]!.sql).toContain("WHERE hourly.last_tick_ts < excluded.last_tick_ts");
     expect(statements[0]!.sql).toContain("last_tick_ts = excluded.last_tick_ts");
   });
 

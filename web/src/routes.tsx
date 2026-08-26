@@ -1,0 +1,36 @@
+import { createBrowserRouter } from "react-router";
+import { Layout } from "./app/Layout.js";
+import { BandsView } from "./views/BandsView.js";
+import { ScanView } from "./views/ScanView.js";
+import { BandDetailView } from "./views/BandDetailView.js";
+import { CraftDetailView } from "./views/CraftDetailView.js";
+import { ItemDetailView } from "./views/ItemDetailView.js";
+import { ItemsView } from "./views/ItemsView.js";
+import { NotFoundView } from "./views/NotFoundView.js";
+
+/**
+ * Routes.
+ *
+ * Bands are at `/` rather than `/bands` because they are what someone opens before
+ * setting up orders for the evening — the ranked craft scan is the secondary view, not the
+ * front door.
+ *
+ * Deep links work in production because `wrangler.jsonc` sets
+ * `not_found_handling: "single-page-application"`, so `/bands/COAL` serves index.html and
+ * the router takes it from there.
+ */
+export const router = createBrowserRouter([
+  {
+    path: "/",
+    element: <Layout />,
+    children: [
+      { index: true, element: <BandsView /> },
+      { path: "bands/:tag", element: <BandDetailView /> },
+      { path: "scan", element: <ScanView /> },
+      { path: "craft/:baseTag", element: <CraftDetailView /> },
+      { path: "items", element: <ItemsView /> },
+      { path: "item/:tag", element: <ItemDetailView /> },
+      { path: "*", element: <NotFoundView /> },
+    ],
+  },
+]);

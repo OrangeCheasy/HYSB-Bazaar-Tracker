@@ -117,7 +117,14 @@ describe("percentiles, not min/max", () => {
   it("ignores a single extreme outlier", () => {
     const clean = separatedWeek();
     const withWick = [...clean];
-    withWick[0] = bar(0, { bidAvg: 1, bidMin: 1, bidMax: 1, askAvg: 99_999, askMin: 99_999, askMax: 99_999 });
+    withWick[0] = bar(0, {
+      bidAvg: 1,
+      bidMin: 1,
+      bidMax: 1,
+      askAvg: 99_999,
+      askMin: 99_999,
+      askMax: 99_999,
+    });
 
     const a = computeBand({ bars: clean, asOf: NOW });
     const b = computeBand({ bars: withWick, asOf: NOW });

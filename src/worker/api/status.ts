@@ -1,14 +1,13 @@
-import { selectLatestRunPerKind, selectLatestSuccessfulRun, type RunKind, type RunRow } from "../db/runs.js";
+import type { RunStatus, StatusPayload } from "@core/index.js";
+import {
+  selectLatestRunPerKind,
+  selectLatestSuccessfulRun,
+  type RunKind,
+  type RunRow,
+} from "../db/runs.js";
 import { selectRowCounts } from "../db/status.js";
 import type { Env } from "../index.js";
 import { json } from "./index.js";
-
-interface RunStatus {
-  readonly startedAt: number;
-  readonly durationMs: number | null;
-  readonly ok: boolean;
-  readonly error: string | null;
-}
 
 function shapeRun(row: RunRow | undefined): RunStatus | null {
   if (!row) return null;
@@ -48,8 +47,9 @@ export async function handleStatus(env: Env): Promise<Response> {
   const lastIngestAt = lastSuccessfulIngest?.started_at ?? null;
   const dataAgeSeconds = lastIngestAt !== null ? now - lastIngestAt : null;
 
+  const payload: StatusPayload = { lastIngestAt, dataAgeSeconds, rowCounts, runs };
   return json(
-    { lastIngestAt, dataAgeSeconds, rowCounts, runs },
+    payload,
     { generatedAt: now, staleAfter: now + 15, source: "d1" },
     200,
     // The whole point of this route is reporting how stale everything ELSE is — caching

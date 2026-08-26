@@ -1,6 +1,6 @@
 # ROADMAP
 
-Eight phases. Each is independently shippable and independently *reversible*. Do not
+Eight phases. Each is independently shippable and independently _reversible_. Do not
 start a phase until the previous one's Definition of Done is fully green — this project
 has a compounding data layer, and a bug in Phase 2 silently poisons every number the site
 ever shows.
@@ -10,10 +10,12 @@ Estimated effort assumes evenings, not full days.
 ---
 
 ## Phase 0 — Scaffold and decisions
+
 **Goal:** an empty but correctly-shaped repo that deploys a "hello" page to production.
 **Effort:** 1 evening
 
 Deliverables:
+
 - npm workspaces monorepo: `packages/core`, `web`, root worker
 - TypeScript strict config shared via `tsconfig.base.json`
 - `wrangler.jsonc` with assets + D1 + KV + cron bindings (IDs filled after creation)
@@ -31,6 +33,7 @@ cheaper than debugging it later alongside real bugs.
 ---
 
 ## Phase 0.5 — Measure before you commit
+
 **Goal:** replace every storage estimate in CLAUDE.md with a number you measured.
 **Effort:** 30 minutes
 
@@ -40,6 +43,7 @@ from my estimate of the payload shape, and if that estimate is off by 3x every n
 downstream is wrong.
 
 Write a throwaway script that fetches the Hypixel bazaar endpoint once and reports:
+
 - `content-length`, raw and gzipped
 - product count, and how many have `buy_summary`/`sell_summary`
 - `JSON.parse` wall time (run it 10 times, take the median)
@@ -56,10 +60,12 @@ this whole plan assumes — keyless, complete, one request.
 ---
 
 ## Phase 1 — Port the domain core
+
 **Goal:** `packages/core` fully implements the Python model, with tests, and zero I/O.
 **Effort:** 2–3 evenings
 
 Port in this order (each depends on the last):
+
 1. `sides.ts` — normalize raw points, derive ask/bid structurally
 2. `stats.ts` — mean, avg-low, avg-high, floor, ceiling, spread, volatility, flow rates
 3. `profile.ts` — hour-of-day bucketing, index vs 24h mean, best contiguous window
@@ -67,6 +73,7 @@ Port in this order (each depends on the last):
 5. `recipes.ts` — recipe type, ratio exceptions, verified flag
 
 Required tests:
+
 - **Inversion test** — feed a series with `buy`/`sell` and their min/max/volume/movingWeek
   fields swapped; assert byte-identical `Stats` output. This is the load-bearing test.
 - Known-value tests: hand-compute one craft's three scenarios and assert exact numbers
@@ -84,6 +91,7 @@ reusable-systems discipline that makes a multi-project studio work.
 ---
 
 ## Phase 2 — Data layer and ingestion
+
 **Status: deployed and ingesting; 48-hour clock started 2026-08-26 ~03:00 UTC.** Remote D1
 migrated, R2 bucket holding real per-tick objects, cron live and steady at 12 ingests/hour.
 As of version `795c2c5d`, **all four run kinds report `ok=true, error=null`** — the
@@ -105,6 +113,7 @@ have three or four weeks of your own five-minute data. That is better than anyth
 Coflnet would give you for the same window.
 
 Deliverables:
+
 - Migrations for `products`, `recipes`, `snapshots`, `hourly`, `daily`, `runs`
 - Tier assignment: a tag is Tier A if referenced by a recipe, **or** in the top ~500 by
   `sellMovingWeek`, **or** the lowest- or highest-level book of an enchant family
@@ -121,8 +130,9 @@ Deliverables:
   previously "keep indefinitely" and are not any more
 - `event.cron` branching in `scheduled`
 - Nightly `wrangler d1 info`-equivalent size check recorded into `runs`
- 
+
 Watch for:
+
 - Chunk inserts by **bound parameter count** (cap 100/query), not row count
 - Deletes count as rows written — budget pruning alongside inserts
 - Hypixel occasionally returns a product with missing `quick_status`; skip, don't crash
@@ -139,6 +149,7 @@ broken the ingest and confirmed `runs` recorded the failure.
 ---
 
 ## Phase 3 — Historical backfill
+
 **Status: deferred by decision, 2026-08-25. Re-scoped 2026-08-26 by the 30-day cap.** Not
 skipped for lack of time — deferring is free and delaying Phase 2 is not. Coflnet's
 history stays available; our own five-minute history exists only if the cron was running
@@ -171,6 +182,7 @@ detect gaps in your collection. At ~150 tags and one request per tag, it is a 95
 job. The rate limit is a one-time cost, not an ongoing constraint.
 
 Deliverables:
+
 - `scripts/backfill.ts` — local Node, hits SkyCofl, writes to D1 via the D1 HTTP API or
   `wrangler d1 execute --file`
 - Rate limiter: min 1.05s between requests, honors `Retry-After` on 429
@@ -179,6 +191,7 @@ Deliverables:
   your own data
 
 Watch for:
+
 - SkyCofl coarsens resolution the further back you go; do not assume even spacing
 - This script must never end up imported by the Worker. Enforce with an ESLint boundary
   rule if you can be bothered — a comment is not enforcement
@@ -190,6 +203,7 @@ re-running the script is a no-op rather than a duplicate. Never request a range 
 ---
 
 ## Phase 4 — API and precompute
+
 **Status: DONE — deployed and verified 2026-08-25.** All seven endpoints live on version
 `59e5b9af`; `npm test` 219 green across 20 files, `npm run typecheck` clean. Verified
 against production rather than assumed:
@@ -206,6 +220,7 @@ against production rather than assumed:
 **Effort:** 2 evenings
 
 Endpoints:
+
 ```
 GET /api/scan?tax=&capture=&window=   ranked craft list
 GET /api/item/:tag                    stats across 1d/7d/30d
@@ -217,6 +232,7 @@ GET /api/status                       last ingest, data age, row counts
 ```
 
 Deliverables:
+
 - `precompute.ts` writes the default-parameter scan to KV each cron; `/api/scan` with
   default params is a single KV read
 - Non-default parameters recompute from `hourly` in D1 — parameterized scans are the
@@ -231,106 +247,58 @@ endpoint returns a correct `meta` block including during a stale-data window.
 ---
 
 ## Phase 4.5 — Weekly bands and anvil merges
+
+**Status: DONE 2026-08-26**, deployed `2c19cf17`. 349 tests, typecheck and lint clean.
+Domain rules live in CLAUDE.md §8; the decisions in ADR-023, ADR-025.
+
 **Goal:** the feature the site is actually for — trailing weekly high/low bands — plus
 enchanted-book merging as a second craft type.
-**Effort:** 3–4 evenings
 
-Read CLAUDE.md §8's two new subsections before starting. They carry the domain rules; this
-section is only the build order.
+### What shipped
 
-### Part A — the conversion graph (do this first, both parts need it)
-**Status: DONE 2026-08-26.** `packages/core/src/convert.ts` + 24 tests. Core coverage
-98.35% stmts / 94.75% branch / 100% lines. One uniform edge type, no discriminated union —
-`2^k` emerges from composing k edges of `inputPerOutput: 2` rather than being a special
-case. Multiplicative shortest path, Dijkstra-safe because `inputPerOutput >= 1` means
-traversing an edge never lowers cost, so cyclic recipe graphs cannot spiral.
+- **`packages/core/src/convert.ts`** — one cheapest-path solver over a conversion graph,
+  serving both anvil chains and multi-step compaction (ADR-023). No discriminated union:
+  `2^k` emerges from composing k edges of ratio 2, so Sharpness 1→7 is six edges and 64
+  falls out of the multiplication. Multiplicative shortest path, Dijkstra-safe because
+  `inputPerOutput ≥ 1` means traversing an edge never lowers cost — so a cyclic recipe
+  graph cannot spiral.
+- **`packages/core/src/anvil.ts`** + migration `0008` (`kind` discriminator) — 620 edges
+  derived from 155 families **at runtime by the daily cron**, never seeded in a migration:
+  a hardcoded list would stale the catalogue, and `INSERT ... SELECT FROM products` would
+  put zero rows on a fresh database (ADR-024's replay property). All `verified = 0`.
+- **Tier A gained the book level-endpoint clause** — 793 tags, of which 295 are book
+  endpoints. The `kind = 'compact'` filter in `ingest.ts` is load-bearing: unioning anvil
+  recipe tags the way compaction tags are unioned would promote all 777 book tags.
+- **`packages/core/src/bands.ts`** + `GET /api/bands/:tag` and `GET /api/bands` —
+  percentile bands with hit-rates, ranked by volume-and-feasibility-adjusted profit/day,
+  precomputed to `bands:default:v1` by the hourly cron. No migration needed: `hourly`
+  already carried `bid_min/avg/max` and `ask_min/avg/max`.
+- `/api/scan` merges compaction and anvil into **one** ranked list — they compete for the
+  same capital, so separate leaderboards would hide the comparison that matters.
 
-`packages/core/src/convert.ts`. A recipe stops being "base × ratio → product" and becomes
-an edge in a graph; what the model wants is the **cheapest path** to one unit of the
-output. This single module serves three purposes:
+### What the build taught us, kept because it will be re-derived wrong otherwise
 
-1. Anvil chains, where every intermediate level is itself tradeable and entering at level 3
-   is often cheaper than at level 1
-2. Tier-2 compaction (`SUGAR_CANE → ENCHANTED_SUGAR → ENCHANTED_SUGAR_CANE`), which is the
-   same problem and is currently **wrong in production** — see TODO.md
-3. Any future multi-step recipe, without a third implementation
+- **An enormous merge margin means the merge does not exist** (ADR-025). Looting IV asks
+  50,000 and Looting V asks 172,816,195 — Looting V comes from a minigame, not an anvil.
+  Edges above an implied ratio of 3 are withheld and the family re-targets the highest
+  rung a merge can reach. 45 of 320 judgeable edges are gated.
+- **Enchant levels are not what they look like.** Three level-0 books exist; eleven
+  families span levels 1–10 (nine merges, not the familiar six); `FEATHER_FALLING` lists
+  1–10 then jumps to 20. Adjacency, not `min..max`, is what keeps the chain honest.
+- **The band and the touch are different statistics.** The band is a percentile of hourly
+  _averages_ — a price you can rest an order at. A touch is tested against the hour's
+  _extreme_ — whether price actually got there. Confusing them is the subtle failure.
 
-Build it generic over edges. Do not special-case anvils.
-
-### Part B — anvil merges
-**Status: DONE 2026-08-26**, deployed `a078afbe`. 293 tests green. Measured in production:
-**620 anvil edges** from 155 families, all `verified = 0`; Tier A is **793 tags of which
-295 are book level-endpoints**; `/api/scan` returns **144 rows — 43 compaction and 101
-anvil, ranked in one list by profit/day**. KV payload 263 KB, warm reads ~100ms TTFB.
-
-**Resolved during the same session (ADR-025), deployed `a43323ca`.** The first anvil scan
-ranked `ENCHANTMENT_LOOTING_4 → _5` first at 2.88 billion profit/day — a 1,509% margin on a
-merge that does not exist, because Looting V comes from a minigame rather than an anvil.
-Edges whose implied merge ratio exceeds 3 are now withheld and the family re-targets the
-highest rung a merge can actually reach. 45 of 320 judgeable edges are gated; the top of
-the ranking now sits at −1% to 0% floor margins, the band section 8 predicts.
-
-Fixed alongside: the book price feed keyed off one global `MAX(hour_ts)` — a partial hour —
-and so priced only 482 of 777 book tags, dropping exactly the thin high-value top rungs the
-scan exists to evaluate. Now a per-tag latest price over a 48h lookback.
-
-- `packages/core/src/anvil.ts` — parse `ENCHANTMENT_{ENCHANT}_{LEVEL}` into (family,
-  level); derive each family's level range from the product list, never a hardcoded map
-- Migration: `recipes` needs a `kind` discriminator (`'compact' | 'anvil'`). The existing
-  table is `(base_tag, ench_tag, ratio, verified, note)` with `UNIQUE(base_tag, ench_tag)`,
-  which stores an anvil edge fine — `ratio` is 2 — but nothing currently distinguishes the
-  two craft types, and they have different UI, different gating, and different fill risk
-- Tier assignment gains the book level-endpoint clause (Phase 2 deliverables)
-- Seed anvil recipes for every family, all `verified = 0`
-
-### Part C — weekly bands
-**Status: core + per-tag endpoint DONE 2026-08-26**, deployed `86ef7dcb`. 336 tests green.
-`packages/core/src/bands.ts` and `GET /api/bands/:tag?days=&pLow=&pHigh=`. Confirmed no
-migration was needed — `hourly` already carries `bid_min/avg/max` and `ask_min/avg/max`.
-
-The sides test was written before the implementation and mutation-verified: flipping the
-two percentile lines fails 12 tests, three of them named for the inversion. A second
-mutation (touch tested against `bidMax` instead of `bidMin`) fails 2.
-
-**Part C is now complete**, deployed `2c19cf17`. `GET /api/bands` ranks every Tier A tag
-best-to-worst by profit/day, precomputed to `bands:default:v1` by the hourly cron and
-served as a single KV read on default parameters.
-
-The budget problem is solved by streaming, not by cutting scope. Rows are pulled in bulk
-pages `ORDER BY tag` and each tag's band is finalized the moment the tag changes, so the
-cost is `rows / page size` (~14 pages) rather than 793 queries, and resident memory is one
-tag's 168 bars rather than 133k objects. `pageSize` is injectable so the pagination is
-genuinely tested with small pages.
-
-Ranking is volume-and-feasibility-adjusted, never spread alone: profit/day is net-per-unit
-(tax on the sell leg only) times daily flow on the binding side, times capture, times the
-LIMITING hit-rate — both legs must fill, so a wide band nobody's order reaches is worth
-zero per day rather than a lot.
-
-- `packages/core/src/bands.ts` — trailing-window percentile bands plus hit-rate
-- `GET /api/bands/:tag?days=&pLow=&pHigh=` — buy band, sell band, hit counts, week count
-- `GET /api/bands` — ranked band scan, the band analogue of `/api/scan`
-- Precompute the default band scan to KV alongside the craft scan
-
-**Watch for:**
-- Sides. A buy order competes at `bid`, a sell offer at `ask` (CLAUDE.md §1). Building the
-  low band from the ask side inverts the whole strategy and is the single most likely bug
-  in this phase — write the test that would catch it first
-- Percentiles, not `MIN`/`MAX` — a 5-minute wick is not a transactable price
-- A band without its hit-rate is not shippable (non-negotiable #6)
-- 4 weeks is the *maximum* n the 30-day cap allows for multi-week claims. Report the week
-  count; never imply a longer track record
-- Anvil ratios are `2^(M-L)`, so an off-by-one in level arithmetic is a 2x cost error, not
-  a rounding difference
-
-**Done when:** a band endpoint returns buy/sell bands with hit-rates for any Tier A tag;
-the anvil scan ranks merges by profit-per-day with fill feasibility attached; the
-cheapest-path solver picks the right entry level on a hand-computed case; and
-`ENCHANTED_SUGAR_CANE` no longer reports a 3,000% margin.
+**Done when:** ~~a band endpoint returns buy/sell bands with hit-rates for any Tier A
+tag~~ (code complete; data-gated until 24h of `hourly` accumulates — see TODO.md);
+~~the anvil scan ranks merges by profit-per-day with fill feasibility attached~~ (met);
+~~the cheapest-path solver picks the right entry level on a hand-computed case~~ (met);
+~~and `ENCHANTED_SUGAR_CANE` no longer reports a 3,000% margin~~ (met — now −0.1%).
 
 ---
 
 ## Phase 5 — Frontend
+
 **Goal:** the interactive site.
 **Effort:** 4–6 evenings, the largest phase
 
@@ -341,6 +309,7 @@ the chart library behind your own component is the point; picking the "right" on
 is not.
 
 Views:
+
 1. **Band table** — the landing view, and the reason the site exists. Per tag: buy band,
    sell band, spread after tax, and the hit-rate for each side. Sortable, filterable by
    capital. This is what someone opens before setting up orders for the evening.
@@ -359,6 +328,7 @@ Views:
    visible, not buried.
 
 Non-negotiable UI rules:
+
 - A margin number never appears without its fill-feasibility number adjacent
 - A band never appears without its hit-rate adjacent — same rule, same reason
 - Unverified recipes are visually marked. Every anvil recipe starts unverified, so this
@@ -373,10 +343,12 @@ who has never seen it can explain what "crafts/day" means from the UI alone.
 ---
 
 ## Phase 6 — Production deploy
+
 **Goal:** `orangecheasy.net` live, deploying from `main`, observable.
 **Effort:** 1 evening
 
 Deliverables:
+
 - Custom domain attached to the Worker (Workers → Settings → Domains & Routes)
 - GitHub Actions: PR runs typecheck + lint + test; merge to `main` runs migrations then
   deploys. `CLOUDFLARE_API_TOKEN` scoped to Workers Scripts Edit + D1 Edit only
@@ -390,10 +362,12 @@ deliberately broken a deploy and confirmed CI caught it before production did.
 ---
 
 ## Phase 7 — Earn the traffic
+
 **Goal:** the reasons someone returns tomorrow.
 **Effort:** ongoing
 
 Candidates, roughly in value order:
+
 - **Alerts** — "tell me when ENCHANTED_X margin exceeds N". Cloudflare Queues is included
   in the paid plan, and a Discord webhook is the cheapest delivery channel, so the
   infrastructure cost here is zero. This is the single strongest retention feature and the
@@ -409,7 +383,7 @@ Candidates, roughly in value order:
   recipe-ratio or collection-gating risk, and no competitor front-pages it.
 - **Backtest** — "if you had run this strategy for 30 days, here is what happened."
   Expensive to build, but it is the one thing that turns a calculator into a tool people
-  trust — and with a 30-day window it is now *exactly* the span we retain, so a backtest
+  trust — and with a 30-day window it is now _exactly_ the span we retain, so a backtest
   is the natural validation of the band strategy rather than a separate data problem.
 
 Deliberately **not** doing: user accounts, a mod, a mobile app, real-money anything.
@@ -417,19 +391,20 @@ Deliberately **not** doing: user accounts, a mod, a mobile app, real-money anyth
 ---
 
 ## Phase 8 — Publish the open dataset
+
 **Goal:** the aggregated bazaar history, free and open, as bulk dumps.
 **Effort:** 2 evenings, but gated behind a month of proven collection
 
 **Re-scoped 2026-08-26: this is a rolling 30-day window, not an accumulating archive.**
 The retention cap (CLAUDE.md §3) means we never hold more than a month, so what gets
-published is "the last 30 days, refreshed daily" — a *current* dataset rather than a
+published is "the last 30 days, refreshed daily" — a _current_ dataset rather than a
 historical one. Two consequences worth being honest about up front:
 
 - **We are not the place to get 2024 bazaar history.** Anyone wanting a long series still
   needs Coflnet or their own collector. Say so in the README rather than letting people
   discover it after downloading.
 - **Dated files stop being immutable in the useful sense.** A day's file is still frozen
-  once written, but it *disappears* 30 days later. The manifest must state the window, and
+  once written, but it _disappears_ 30 days later. The manifest must state the window, and
   consumers who want history have to mirror the dumps themselves. That is a legitimate
   design — it is how a rolling feed works — but it must be documented, not implied.
 
@@ -447,16 +422,17 @@ looser — a 3-day outage is 10% of everything you would be publishing.
 Hypixel's API policy (developer.hypixel.net/policies) contains three clauses that touch
 this. Being free and open source clears one of them:
 
-| Clause | Status |
-|---|---|
-| No commercial use; features must be available to all users | **Cleared** — free, open, no tiers |
-| Not for automated data collection at scale | Live risk. Stated example is player-stat polling; market data is arguably distinct |
-| May not proxy the Public API to 3rd party developers | Live risk, mitigated by the design below |
+| Clause                                                     | Status                                                                             |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| No commercial use; features must be available to all users | **Cleared** — free, open, no tiers                                                 |
+| Not for automated data collection at scale                 | Live risk. Stated example is player-stat polling; market data is arguably distinct |
+| May not proxy the Public API to 3rd party developers       | Live risk, mitigated by the design below                                           |
 
 Neither remaining clause is about money, so "it's free" does not resolve them. The
 downside is not legal — it is losing API access, which ends the project.
 
 Mitigations, in order of value:
+
 1. **Open-source the collector**, not only the data. "Here is the code, run your own" is
    not proxying under any reading, and the project survives being cut off.
 2. **Publish aggregates, not a mirror.** Hourly OHLC with volume and sample counts is a
@@ -496,14 +472,14 @@ start, and fixing it for the next person is cheap once the collection exists.
 
 ## Cost expectations
 
-| Item | Cost |
-|---|---|
-| Workers Paid | already active |
-| D1 | within paid inclusions with large headroom at Tier A volume |
-| KV | within inclusions |
-| R2 | within 10 GB free **only if** the archive policy in CLAUDE.md §3 is followed |
-| Queues | within inclusions; unlocks Phase 7 alerts |
-| Domain | already owned |
+| Item         | Cost                                                                         |
+| ------------ | ---------------------------------------------------------------------------- |
+| Workers Paid | already active                                                               |
+| D1           | within paid inclusions with large headroom at Tier A volume                  |
+| KV           | within inclusions                                                            |
+| R2           | within 10 GB free **only if** the archive policy in CLAUDE.md §3 is followed |
+| Queues       | within inclusions; unlocks Phase 7 alerts                                    |
+| Domain       | already owned                                                                |
 
 Marginal cost of this project is effectively zero. The binding constraint is no longer
 money or platform limits — it is evening-hours and the discipline to not widen scope

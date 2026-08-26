@@ -274,3 +274,45 @@ export function detectMergeGates(
 
   return { usable, gated };
 }
+
+/**
+ * The highest level a merge chain may target.
+ *
+ * Anvil merging tops out at level 5 for most enchants. Levels 6 and 7 exist on the bazaar
+ * — 20 families list a rung 6 and 16 list a rung 7 — but they are not produced by combining
+ * two level-5 books; they come from elsewhere in the game. Targeting them prices a craft
+ * nobody can perform, which is the same failure ADR-025's gate detection catches from the
+ * price side. This catches it structurally, so a family whose upper rungs happen to be
+ * cheap enough to look mergeable is still not routed through them.
+ *
+ * The exception is the families that run all the way to 10. Those genuinely merge the whole
+ * way, so their chains are left alone.
+ *
+ * Measured across the live catalogue (155 families): 4 top out at 2, 10 at 3, 4 at 4, 76 at
+ * 5, 20 at 6, 16 at 7, 1 at 9, and 11 at 10. So this rule re-targets 36 families and leaves
+ * 119 untouched.
+ *
+ * **The level-9 family is the open question.** `CULTIVATING` lists rungs to 9 and no 10, so
+ * by the letter of this rule it is capped at 5. If Cultivating really does merge to 10 and
+ * the top rung simply is not listed, the cap is wrong for it — one family, flagged here
+ * rather than silently decided.
+ */
+export const ANVIL_SOFT_CAP_LEVEL = 5;
+export const ANVIL_FULL_CHAIN_LEVEL = 10;
+
+export function mergeTargetLevel(levels: readonly number[]): number | undefined {
+  const usable = levels.filter((l) => l >= MIN_MERGE_LEVEL).sort((a, b) => a - b);
+  const top = usable[usable.length - 1];
+  if (top === undefined) return undefined;
+
+  // A family that reaches 10 merges all the way; anything else stops at 5.
+  const cap = usable.includes(ANVIL_FULL_CHAIN_LEVEL)
+    ? ANVIL_FULL_CHAIN_LEVEL
+    : ANVIL_SOFT_CAP_LEVEL;
+  if (top <= cap) return top;
+
+  // The highest rung at or below the cap that the family actually lists — not the cap
+  // itself, since a family may skip levels.
+  const reachable = usable.filter((l) => l <= cap);
+  return reachable[reachable.length - 1];
+}

@@ -31,7 +31,9 @@ export function buildSnapshotsUpsert(
   rows: readonly SnapshotRow[],
 ): D1PreparedStatement[] {
   return chunkByParamCount(rows, PARAMS_PER_ROW).map((chunk) => {
-    const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const placeholders = chunk
+      .map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .join(", ");
     const sql = `
       INSERT INTO snapshots (
         tag, ts, ask, bid, ask_depth, bid_depth, ib_week, is_week,

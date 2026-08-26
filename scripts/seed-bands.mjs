@@ -57,24 +57,6 @@ const TAGS = [
     hours: HOURS,
     samples: 12,
   },
-  {
-    tag: "ENCHANTMENT_SHARPNESS_1",
-    mid: 39_500,
-    vol: 0.012,
-    ibWeek: 900,
-    isWeek: 1_100,
-    hours: HOURS,
-    samples: 12,
-  },
-  {
-    tag: "ENCHANTMENT_ULTIMATE_WISE_5",
-    mid: 19_800_000,
-    vol: 0.02,
-    ibWeek: 41,
-    isWeek: 55,
-    hours: HOURS,
-    samples: 12,
-  },
   // Under four weeks — must render its week count inline.
   {
     tag: "ENCHANTED_CACTUS_GREEN",
@@ -97,6 +79,45 @@ const TAGS = [
   },
 ];
 
+/**
+ * Enchant families, as full level chains.
+ *
+ * Anvil recipes are derived at RUNTIME by the daily cron from the live product list, so a
+ * local database that has never run that cron has zero anvil rows and the scan's craft-type
+ * column has nothing to show. This writes both the book rungs and the 2:1 merge edges
+ * between them, the same shape `anvilEdges` produces.
+ *
+ * Prices climb slightly faster than 2x per level so merging is a small loss on some rungs
+ * and a small gain on others — which is what the real market looks like, and what makes the
+ * cheapest-entry search do any work.
+ */
+const FAMILIES = [
+  {
+    family: "ENCHANTMENT_SHARPNESS",
+    levels: 7,
+    base: 38_000,
+    step: 1.95,
+    ibWeek: 900,
+    isWeek: 1_100,
+  },
+  {
+    family: "ENCHANTMENT_GROWTH",
+    levels: 6,
+    base: 120_000,
+    step: 2.05,
+    ibWeek: 400,
+    isWeek: 520,
+  },
+  {
+    family: "ENCHANTMENT_ULTIMATE_WISE",
+    levels: 5,
+    base: 1_250_000,
+    step: 2.4,
+    ibWeek: 41,
+    isWeek: 55,
+  },
+];
+
 /** Deterministic pseudo-random so repeated runs produce the same fixture. */
 function rng(seed) {
   let state = seed >>> 0;
@@ -110,7 +131,39 @@ function esc(value) {
   return typeof value === "string" ? `'${value.replace(/'/g, "''")}'` : String(value);
 }
 
-const lines = ["DELETE FROM hourly;", "DELETE FROM products;"];
+const lines = [
+  "DELETE FROM hourly;",
+  "DELETE FROM products;",
+  // Only the derived anvil edges — the compaction recipes come from migration 0003 and
+  // deleting them would leave a local database that no migration can restore.
+  "DELETE FROM recipes WHERE kind = 'anvil';",
+];
+
+/** Every book rung, expanded into the same shape a real tag has. */
+for (const fam of FAMILIES) {
+  for (let level = 1; level <= fam.levels; level++) {
+    TAGS.push({
+      tag: `${fam.family}_${level}`,
+      mid: fam.base * Math.pow(fam.step, level - 1),
+      vol: 0.03,
+      // Thinner at every rung up, which is what makes the top rungs 21% of coin turnover
+      // on 4.6% of units (CLAUDE.md §2).
+      ibWeek: Math.max(1, Math.round(fam.ibWeek / Math.pow(2, level - 1))),
+      isWeek: Math.max(1, Math.round(fam.isWeek / Math.pow(2, level - 1))),
+      hours: HOURS,
+      samples: 12,
+    });
+  }
+
+  // The merge edges themselves: two books of level N make one of level N+1.
+  for (let level = 1; level < fam.levels; level++) {
+    lines.push(
+      `INSERT INTO recipes (base_tag, ench_tag, ratio, verified, note, kind) VALUES ` +
+        `(${esc(`${fam.family}_${level}`)}, ${esc(`${fam.family}_${level + 1}`)}, 2, 0, ` +
+        `'seeded fixture', 'anvil');`,
+    );
+  }
+}
 
 for (const spec of TAGS) {
   lines.push(

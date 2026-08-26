@@ -23,21 +23,6 @@ export function BandDetailView(): React.JSX.Element {
   );
 }
 
-export function ScanView(): React.JSX.Element {
-  return (
-    <Placeholder title="Crafts">
-      <p>
-        Compaction and anvil merges in one list ranked by profit per day, never by margin. They
-        compete for the same capital, so splitting them would hide the comparison that matters.
-      </p>
-      <p>
-        Craft type is a visible column. Unverified ratios are marked — every anvil recipe starts
-        unverified, so that marking is the common case rather than an edge one.
-      </p>
-    </Placeholder>
-  );
-}
-
 export function CraftDetailView(): React.JSX.Element {
   const { baseTag } = useParams();
   return (

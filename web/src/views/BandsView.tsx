@@ -2,12 +2,8 @@ import { useMemo, useState } from "react";
 import { fetchBands } from "../api/endpoints.js";
 import { useApi } from "../api/useApi.js";
 import { BandTable } from "../bands/BandTable.js";
-import {
-  AllFilteredOut,
-  BandTableSkeleton,
-  BandsError,
-  NoBandsYet,
-} from "../bands/BandStates.js";
+import { NoBandsYet } from "../bands/BandStates.js";
+import { LoadError, NothingAffordable, TableSkeleton } from "../ui/TableStates.js";
 import { splitByCapital } from "../bands/capital.js";
 import { DEFAULT_SORT, sortByKey, sortRows, type Sort, type SortKey } from "../bands/sort.js";
 import { formatAge, formatCoins } from "../format.js";
@@ -127,16 +123,17 @@ export function BandsView(): React.JSX.Element {
         )}
       </div>
 
-      {error !== undefined && <BandsError error={error} stale={rows !== undefined} />}
+      {error !== undefined && <LoadError error={error} stale={rows !== undefined} />}
 
-      {rows === undefined && loading && <BandTableSkeleton />}
+      {rows === undefined && loading && <TableSkeleton />}
 
       {rows !== undefined && rows.length === 0 && (
         <NoBandsYet skipped={skipped} meta={meta} now={now} />
       )}
 
       {rows !== undefined && rows.length > 0 && sorted.length === 0 && (
-        <AllFilteredOut
+        <NothingAffordable
+          noun="bands"
           hiddenCount={hiddenCount}
           onClear={() => updateSettings({ capital: null })}
         />

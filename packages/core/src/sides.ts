@@ -226,6 +226,10 @@ export function isBarWellFormed(b: Bar): boolean {
  * coarsens the further back you go and omits them on some ranges.
  */
 export interface RawCoflnetPoint {
+  /**
+   * ISO-shaped, and in practice carries NO offset (`2026-08-26T08:00:00`). Read as UTC
+   * regardless — see `parseUtcMillis`. Do not hand this to `Date.parse` directly.
+   */
   readonly timestamp: string;
   readonly buy: number;
   readonly sell: number;
@@ -272,6 +276,25 @@ function toDataSource(s: string): DataSource {
 }
 
 /**
+ * Parse a Coflnet timestamp as UTC, whether or not it says so.
+ *
+ * Coflnet emits `2026-08-26T08:00:00` — ISO-shaped, with a time component and NO offset.
+ * ECMA-262 reads that form as LOCAL time, so `Date.parse` on a UTC-6 machine puts it at
+ * 14:00 UTC. Every backfilled row would then land six hours out, differently depending
+ * on who ran the script, and the hour-of-day profile — the one thing backfilled data
+ * exists to serve (ROADMAP Phase 3) — would be silently, unfalsifiably wrong.
+ *
+ * Timestamps in this project are UTC epoch seconds everywhere (CLAUDE.md section 5), so
+ * an absent offset means UTC. A date-only string is already UTC per spec and is left
+ * alone — appending `Z` to it would produce an unparseable value.
+ */
+function parseUtcMillis(timestamp: string): number {
+  const hasTime = /\d{2}:\d{2}/.test(timestamp);
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(timestamp);
+  return Date.parse(hasTime && !hasZone ? `${timestamp}Z` : timestamp);
+}
+
+/**
  * Normalize a Coflnet history point. This is one of only two places where the ask/bid
  * derivation actually runs — the other is normalizeQuickStatus. Everything else reads
  * already-derived data.
@@ -280,7 +303,7 @@ export function normalizeCoflnetPoint(
   raw: RawCoflnetPoint,
   intervalSeconds: number,
 ): Result<Bar, NormalizeError> {
-  const ms = Date.parse(raw.timestamp);
+  const ms = parseUtcMillis(raw.timestamp);
   if (!Number.isFinite(ms)) return err("missing-field");
 
   const prices = [raw.buy, raw.sell];

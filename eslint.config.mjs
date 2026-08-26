@@ -3,6 +3,20 @@ import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
+/**
+ * `scripts/` is local Node and nothing else may reach into it. The one that matters is
+ * `backfill.ts`: it calls sky.coflnet.com, and Coflnet rate-limits by IP. A Worker
+ * subrequest comes from Cloudflare's SHARED egress pool, so importing this from
+ * src/worker would put every other project on that pool at risk of the blacklist, not
+ * just ours (CLAUDE.md §2). ROADMAP Phase 3 asks for this as a rule rather than a
+ * comment, because a comment is not enforcement.
+ */
+const NO_SCRIPTS_IMPORT = {
+  group: ["**/scripts/*", "**/scripts/**"],
+  message:
+    "scripts/ is local Node only. backfill.ts calls Coflnet, which rate-limits by IP — importing it here would risk blacklisting Cloudflare's shared egress pool (CLAUDE.md §2).",
+};
+
 export default tseslint.config(
   {
     ignores: ["dist/**", ".wrangler/**", "node_modules/**", "coverage/**"],
@@ -41,6 +55,7 @@ export default tseslint.config(
             { group: ["cloudflare:*"], message: "packages/core must stay platform-free." },
             { group: ["node:*"], message: "packages/core must stay platform-free." },
             { group: ["../../../src/*"], message: "packages/core must not import the Worker." },
+            NO_SCRIPTS_IMPORT,
           ],
         },
       ],
@@ -76,6 +91,7 @@ export default tseslint.config(
               group: ["cloudflare:*", "node:*"],
               message: "web/ runs in a browser.",
             },
+            NO_SCRIPTS_IMPORT,
           ],
         },
       ],
@@ -86,6 +102,25 @@ export default tseslint.config(
     files: ["scripts/**/*.{ts,mjs}", "web/vite.config.ts", "*.config.{ts,mjs}"],
     languageOptions: {
       globals: globals.node,
+    },
+  },
+
+  // `scripts/` is local Node and nothing else may reach into it. The one that matters is
+  // `backfill.ts`: it calls sky.coflnet.com, and Coflnet rate-limits by IP. A Worker
+  // subrequest comes from Cloudflare's SHARED egress pool, so importing this from
+  // src/worker would put every other project on that pool at risk of the blacklist, not
+  // just ours (CLAUDE.md §2). ROADMAP Phase 3 asks for this as a rule rather than a
+  // comment, because a comment is not enforcement.
+  //
+  // Scoped to `src/**` alone. `packages/core` and `web/src` already carry a
+  // `no-restricted-imports` of their own, and flat config does not merge two settings of
+  // the same rule — a block listing all three here would silently REPLACE the
+  // platform-free boundaries above rather than add to them. Their `scripts/` pattern is
+  // appended inside their own blocks instead.
+  {
+    files: ["src/**/*.ts"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [NO_SCRIPTS_IMPORT] }],
     },
   },
 );

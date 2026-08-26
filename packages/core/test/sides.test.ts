@@ -352,6 +352,31 @@ describe("normalizeCoflnetPoint", () => {
     expect(r.ok && r.value.ts).toBe(1_704_067_200);
   });
 
+  // Load-bearing, in the same way the inversion test is. Coflnet sends its timestamps
+  // WITHOUT an offset, which `Date.parse` reads as local time — so before this was
+  // fixed, every backfilled row landed off by the runner's UTC offset and the
+  // hour-of-day profile was wrong by a different amount on every machine. These three
+  // spellings of midnight 2024-01-01 UTC must agree.
+  it("reads an offset-less timestamp as UTC, not local time", () => {
+    const naive = normalizeCoflnetPoint({ ...base, timestamp: "2024-01-01T00:00:00" }, 3600);
+    expect(naive.ok && naive.value.ts).toBe(1_704_067_200);
+  });
+
+  it("honours an explicit offset when one is present", () => {
+    const zulu = normalizeCoflnetPoint({ ...base, timestamp: "2024-01-01T00:00:00Z" }, 3600);
+    const offset = normalizeCoflnetPoint(
+      { ...base, timestamp: "2024-01-01T02:00:00+02:00" },
+      3600,
+    );
+    expect(zulu.ok && zulu.value.ts).toBe(1_704_067_200);
+    expect(offset.ok && offset.value.ts).toBe(1_704_067_200);
+  });
+
+  it("leaves a date-only timestamp alone rather than making it unparseable", () => {
+    const r = normalizeCoflnetPoint({ ...base, timestamp: "2024-01-01" }, 3600);
+    expect(r.ok && r.value.ts).toBe(1_704_067_200);
+  });
+
   // Edge case: missing min/max.
   it("falls back to the side average when min/max are missing", () => {
     const r = normalizeCoflnetPoint(

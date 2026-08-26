@@ -70,6 +70,9 @@ Hypixel /v2/skyblock/bazaar  ── cron */5 ──▶ tier split ──▶ snap
 
 SkyCofl /api/bazaar/{tag}/history ── manual, once ──▶ hour-of-day seed only
    local script, NEVER from the Worker           (≤30d — anything older is pruned anyway)
+   resolution follows the SPAN you ask for, not the age: ≤7d → 2h buckets, 8d+ → daily.
+   Ask for 30 days in one call and you get 30 points. Chunk it. (ADR-030)
+   Its timestamps carry NO UTC offset; Date.parse would read them as local. (ADR-032)
 ```
 
 Everything above prunes at 30 days (§3). The 04:23 job is the only thing standing between
@@ -134,6 +137,9 @@ build our own history database from it and stop depending on anyone else's.
 | ------------------------------------ | --------------------------------------- | ----------------------- |
 | `api.hypixel.net/v2/skyblock/bazaar` | `scheduled` handler only                | `fetch` handler, client |
 | `sky.coflnet.com/api/...`            | `scripts/backfill.ts` (local Node) only | Worker, client          |
+
+Both rows are ESLint-enforced, not conventions: `src/**`, `packages/core/**` and
+`web/src/**` cannot import `scripts/**` (`NO_SCRIPTS_IMPORT` in `eslint.config.mjs`).
 
 ---
 
@@ -268,7 +274,11 @@ src/worker/
   precompute.ts           scan results → KV
   api/                    route handlers, thin, no business logic
   db/                     query builders, migrations
-web/                    Vite + React + TS SPA
+web/                    Vite + React + TS SPA. Must not import from src/worker/ —
+                        §4's boundary runs both ways and ESLint enforces it. Shared
+                        payload types and parameter ranges live in core (ADR-026).
+  src/ui/pairedColumns.ts  the only way to build a margin or band column (ADR-027)
+  src/charts/lazy.tsx      the Recharts code-split boundary (ADR-028)
 scripts/                Local-only Node scripts (backfill, migrations, seeding)
 migrations/             D1 SQL migrations, numbered, forward-only
 docs/ROADMAP.md         Phase plan and definition of done
@@ -323,6 +333,13 @@ npm run backfill -- --tag COAL --days 30
 npx wrangler d1 info bazaar          # current database size — check monthly
 ```
 
+**Windows: Smart App Control must be off.** Vite 8 is Rolldown-powered and Rolldown's
+native core is unsigned, so an enforcing policy blocks it and `build`, `test` and
+`dev:web` all fail together with "An Application Control policy has blocked this file".
+Check with `(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name
+VerifiedAndReputablePolicyState).VerifiedAndReputablePolicyState` — `0` is off. The wasm
+fallback does not work (no drive letters under WASI). ADR-029.
+
 Bindings: `DB` (D1), `CACHE` (KV), `ARCHIVE` (R2). The nightly cron records database size
 into `runs` so growth is measured rather than estimated — a month of real numbers beats
 any projection in this file.
@@ -351,7 +368,9 @@ any projection in this file.
    fill-feasibility caveat. Do not build UI that shows a margin number alone. For the
    weekly band (§8) the required companion number is the **hit-rate** — how often price
    actually reached that band — because a band nobody's order ever touches is not a
-   trade, it is a chart annotation.
+   trade, it is a chart annotation. In the UI this is not a review checklist item:
+   `web/src/ui/pairedColumns.ts` returns a tuple of two columns and nothing else
+   constructs either kind, so a lone margin or lone band cannot be written (ADR-027).
 
 ## 8. Domain gotchas worth remembering
 

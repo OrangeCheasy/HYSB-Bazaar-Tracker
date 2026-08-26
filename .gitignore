@@ -25,3 +25,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+
+# local backfill resume state (scripts/backfill.ts)
+scripts/.backfill-state.json

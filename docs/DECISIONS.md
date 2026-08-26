@@ -778,3 +778,215 @@ field sends them somewhere that will not fix it.
 **Cost.** `packages/core` now carries types it does not itself use, which reads oddly next
 to modules that are all behaviour. Accepted: the alternative puts the same declarations in
 two trees that cannot import each other.
+
+---
+
+## ADR-027 — A lone margin column is unconstructible, not merely discouraged
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+`web/src/ui/pairedColumns.ts` exports a factory that takes a value column and its companion
+column and returns a **tuple of two**. `columnList()` flattens a mixed array of plain
+columns and pairs into the flat list `DataTable` wants. Nothing else in `web/` constructs a
+margin column or a band column, so there is no expression that produces one without its
+companion.
+
+**Why not a convention.** CLAUDE.md section 7.6 has two rules of the same shape — a margin
+never renders without its fill feasibility, a band never renders without its hit-rate — and
+both add "adjacent, not in a tooltip". ADR-007 already made `fillFeasibility` non-optional
+in `ScenarioResult`, which guarantees the number is _in scope_. It does not guarantee anyone
+renders it. In session 5b the rendering half was held by a component that physically emitted
+both `<td>`s; generalising `DataTable` to a column list would have dissolved that back into
+a thing a future contributor is trusted to remember.
+
+The rule is load-bearing enough to be worth a type: a p10 buy order sits unfilled ~90% of
+the time **by construction**, and a craft margin is conditional on both sides filling. The
+companion figure is the only thing on the row that says whether the headline is reachable.
+A table that quietly drops it is not a degraded table, it is a misleading one.
+
+**Adjacency survives the responsive collapse.** Returning neighbouring entries in the column
+list makes "adjacent" literal at both widths — neighbouring cells in a desktop `<tr>`, and
+neighbouring grid areas in the sub-640px layout where `DataTable` switches each row to
+`display: grid`. This is why the pairing lives in the column list rather than in a wrapper
+component: a wrapper would have had to be re-solved for the mobile layout.
+
+**Cost.** The column list no longer reads as a flat array, and adding a paired column means
+writing two definitions and one call rather than pushing one object. Accepted — that
+friction is pointed at exactly the thing we do not want done casually.
+
+---
+
+## ADR-028 — Recharts is one lazy chunk, shared by both chart components
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+`web/src/charts/lazy.tsx` is the only module the views import charts from. It wraps
+`PriceChart` and `HourChart` in `React.lazy` + `Suspense`, and both dynamic imports resolve
+into the same chunk.
+
+**Why split at all.** Recharts is roughly the size of the entire rest of the bundle. Two of
+six routes use it, and neither is the landing route — which is the route a Lighthouse run
+measures against the >90 target in ROADMAP Phase 5. The band table and the scan table are
+also the two views someone opens most often, and they need no charting code to render a
+single pixel.
+
+**Why one chunk and not two.** `PriceChart` and `HourChart` appear together on the craft
+detail view and are both absent everywhere else, so they are never independently needed.
+Splitting them separately would buy nothing and cost a second round trip on the one screen
+that wants both.
+
+**The fallback reserves the exact height.** `ChartFallback` takes the same `height` prop the
+real chart will use, so the chunk arriving does not shift the page. This is a CLS concern,
+which is a Lighthouse-scored metric — the split would otherwise trade one score for another.
+
+**Why the indirection is kept even though Recharts is now committed to.** ROADMAP Phase 5
+picks Recharts for development speed and notes that a ~2,000-point hourly series may want
+uPlot instead. `lazy.tsx` plus `charts/types.ts` mean the views import our prop types, not
+Recharts', so that swap stays a change inside `charts/`.
+
+---
+
+## ADR-029 — Vite 8's Rolldown binding requires Smart App Control off on Windows
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+Vite 8 is Rolldown-powered, and Rolldown ships its native core as an **unsigned** in-process
+module, `@rolldown/binding-win32-x64-msvc/rolldown-binding.win32-x64-msvc.node`. Windows
+Smart App Control refuses to load it:
+
+```
+An Application Control policy has blocked this file.
+\\?\...\node_modules\@rolldown\binding-win32-x64-msvc\rolldown-binding.win32-x64-msvc.node
+```
+
+Detect it with `(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+-Name VerifiedAndReputablePolicyState).VerifiedAndReputablePolicyState` — `1` is enforcing,
+`2` is evaluation, `0` is off.
+
+**What it breaks.** Everything that loads a Vite config: `npm run build`, `npm test`
+(vitest resolves its config through Vite), and `npm run dev:web`. It is not selective and
+the failure is several frames deep in a wasm-fallback stack trace, so it does not look like
+what it is. Note that `workerd.exe` and `esbuild.exe` both run fine under the same policy —
+only the unsigned in-process `.node` is refused, which is why `npm run dev` (the Worker) can
+work on a machine where `npm run build` cannot.
+
+**The wasm fallback is not a workaround.** Installing `@rolldown/binding-wasm32-wasi` makes
+the module load, and then every build fails with `[UNRESOLVED_ENTRY] Cannot resolve entry
+module D:\...\vite.config.ts` — the WASI sandbox has no notion of a drive letter. This was
+tried and removed.
+
+**Alternatives considered.** Downgrading to Vite 7 (esbuild + Rollup, no unsigned native
+module) would have fixed it without touching the machine, at the price of pinning the
+project a major version back for a reason no CI runner shares. Signing the binding locally
+does not help: Smart App Control only honours Microsoft-rooted signatures, not a
+self-signed certificate added to the trusted root store.
+
+**Decision.** Stay on Vite 8; Windows contributors turn Smart App Control off. **This is a
+one-way door** — Windows only permits re-enabling Smart App Control by reinstalling the OS,
+so it is a genuine cost being accepted, not a checkbox. Linux and macOS contributors and
+every CI runner are unaffected, which is the argument for not deforming the dependency tree
+around one platform's policy.
+
+---
+
+## ADR-030 — The backfill asks Coflnet for 7 days at a time, not 30
+
+**Date:** 2026-08-26 · **Status:** accepted · **Implements:** ROADMAP Phase 3
+
+Coflnet chooses its bucket size from the **span you request**, not from how old the data
+is. Measured against `COAL` on 2026-08-26, one request per row:
+
+| requested span | points returned | spacing          |
+| -------------- | --------------- | ---------------- |
+| 1 day          | 12              | 2h               |
+| 4 days         | 48              | 2h (one 4h hole) |
+| 7 days         | 84              | 2h               |
+| 8 days         | 8               | ~24h             |
+| 30 days        | 30              | ~24h             |
+
+The cliff is exactly at 7 days. A 1-day window **29 days back** still returns 2h buckets,
+so age costs nothing and span costs everything — which is the opposite of what CLAUDE.md
+§2's "Coflnet coarsens the further back you go" implies, and the reason that sentence is
+about resolution rather than reach.
+
+**Why this decides the shape of the whole job.** Phase 3's stated purpose is hour-of-day
+profiling; the throughput model already works on day one from `sellMovingWeek`. A single
+30-day request returns 30 daily points, from which no hour-of-day profile can be computed
+at all. The convenient one-request-per-tag design would therefore have produced a job that
+runs, reports success, writes 30 rows per tag, and delivers nothing the site can use.
+
+**Decision.** Chunk the window into 7-day requests — five per tag for a 30-day backfill.
+
+**The cost is real and is accepted.** 793 Tier A tags × 5 chunks = **3,965 requests**, and
+at the 1.05s pacing SkyCofl's limits require that is a **~69 minute** run rather than a
+14-minute one. The script prints that ETA before it starts and is resumable (ADR-031)
+precisely because an hour is long enough that people interrupt it.
+
+---
+
+## ADR-031 — Backfilled hours never overwrite ours, and a bucket paints only its own width
+
+**Date:** 2026-08-26 · **Status:** accepted · **Implements:** ROADMAP Phase 3
+
+Two rules govern how a Coflnet bar becomes `hourly` rows. Both exist to stop the backfill
+from manufacturing confidence it does not have.
+
+**1. `ON CONFLICT(tag, hour_ts) DO NOTHING`, never `DO UPDATE`.** This is the whole
+idempotency story — "re-running a completed backfill is a no-op" falls out of it rather
+than resting on the resume file — and it points the right way round: a coarse 1-sample
+Coflnet bar can never displace one of our own 12-sample rows. Measured on the first real
+run: of 158 rows offered for `COAL` over 7 days, **2 were inserted** and 156 bounced off
+rows we already held. The script reports rows _offered_, not _inserted_, so that number
+stays visible instead of reading as 158 successes.
+
+**2. A bucket covers its own width and no further.** Coflnet's buckets are 2h and `hourly`
+is 1h, so a bar has to paint the hours inside it or half the table stays empty and the
+weekly band's percentiles run on half their input. The bound is the bucket's **own**
+measured width (median observed spacing, capped at 6h), not the distance to the next
+bucket. Where Coflnet itself has a hole — and it does, a 4h gap turned up in the first
+4-day probe — the hole stays a hole and is reported by the audit, rather than being
+smoothed over with a reading taken hours away.
+
+Every such row keeps `samples = 1` and `source = 'coflnet'`. That is the honest statement
+that the hour rests on one coarse third-party observation rather than twelve of our own,
+and it is what §3b's "`hourly.samples` must be honest" requires — the rule forbids
+inflating the count, not recording a real observation of one.
+
+**The audit is scoped to `source = 'hypixel'`.** A gap is an hour Coflnet has and _our own
+ingest_ does not. Counting a previous backfill's rows as coverage would make the second
+run report a clean bill of health for exactly the hours the first run papered over, which
+is the one outcome that would make the audit worse than not having it. Hours before our
+earliest own row are reported separately as _seeded_ — we were not collecting yet, so
+there is nothing there to have missed.
+
+---
+
+## ADR-032 — Coflnet timestamps carry no offset and are read as UTC
+
+**Date:** 2026-08-26 · **Status:** accepted · **Amends:** ADR-005
+
+Coflnet returns `"timestamp":"2026-08-26T08:00:00"` — ISO-shaped, with a time component
+and **no offset**. ECMA-262 reads that form as **local time**. `normalizeCoflnetPoint`
+called `Date.parse` directly, so on the machine this was built on (`America/Edmonton`,
+UTC-6) every backfilled bar landed at 14:00 UTC instead of 08:00.
+
+**Why this was worth catching before the first run rather than after.** The error is a
+clean shift, so nothing about the output looks wrong: prices are plausible, the series is
+continuous, `ask > bid` still holds and the load-bearing inversion test still passes. It
+is invisible to every check this repo has. What it destroys is precisely and only the
+hour-of-day profile — the one thing Phase 3 exists to produce (ADR-030) — and it destroys
+it by a different amount for every contributor, so two people would get two different
+"best hour to buy" answers from the same upstream data and neither could reproduce the
+other's. The existing tests missed it because every fixture timestamp in
+`sides.test.ts` was written with a `Z`.
+
+**Decision.** `parseUtcMillis` appends `Z` when a timestamp has a time component and no
+offset, and leaves everything else alone — an explicit offset is honoured, and a date-only
+string is already UTC per spec and must not have `Z` appended or it becomes unparseable.
+The fix lives in `packages/core`, not in the script, because the function is named for
+Coflnet and therefore owns Coflnet's wire contract; any future caller gets the same
+answer. Timestamps are UTC epoch seconds everywhere in this project (CLAUDE.md §5), so an
+absent offset can only mean UTC.
+
+Three tests pin it: the offset-less form, an explicit `+02:00`, and the date-only form
+must all agree on midnight 2024-01-01 UTC.

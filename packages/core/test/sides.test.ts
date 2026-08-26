@@ -352,6 +352,31 @@ describe("normalizeCoflnetPoint", () => {
     expect(r.ok && r.value.ts).toBe(1_704_067_200);
   });
 
+  // Load-bearing, in the same way the inversion test is. Coflnet sends its timestamps
+  // WITHOUT an offset, which `Date.parse` reads as local time — so before this was
+  // fixed, every backfilled row landed off by the runner's UTC offset and the
+  // hour-of-day profile was wrong by a different amount on every machine. These three
+  // spellings of midnight 2024-01-01 UTC must agree.
+  it("reads an offset-less timestamp as UTC, not local time", () => {
+    const naive = normalizeCoflnetPoint({ ...base, timestamp: "2024-01-01T00:00:00" }, 3600);
+    expect(naive.ok && naive.value.ts).toBe(1_704_067_200);
+  });
+
+  it("honours an explicit offset when one is present", () => {
+    const zulu = normalizeCoflnetPoint({ ...base, timestamp: "2024-01-01T00:00:00Z" }, 3600);
+    const offset = normalizeCoflnetPoint(
+      { ...base, timestamp: "2024-01-01T02:00:00+02:00" },
+      3600,
+    );
+    expect(zulu.ok && zulu.value.ts).toBe(1_704_067_200);
+    expect(offset.ok && offset.value.ts).toBe(1_704_067_200);
+  });
+
+  it("leaves a date-only timestamp alone rather than making it unparseable", () => {
+    const r = normalizeCoflnetPoint({ ...base, timestamp: "2024-01-01" }, 3600);
+    expect(r.ok && r.value.ts).toBe(1_704_067_200);
+  });
+
   // Edge case: missing min/max.
   it("falls back to the side average when min/max are missing", () => {
     const r = normalizeCoflnetPoint(
@@ -384,6 +409,79 @@ describe("normalizeCoflnetPoint", () => {
   it("rejects non-finite prices", () => {
     const r = normalizeCoflnetPoint({ ...base, buy: Number.NaN }, 3600);
     expect(r.ok === false && r.error).toBe("non-finite");
+  });
+
+  // Coflnet omits a zero-valued field rather than sending `0`, and rounds to one decimal,
+  // so an item trading at the 0.1 floor sends buckets with no `sell` at all. These four
+  // are real payloads from the 2026-08-26 production backfill, which saw 6,835 of them.
+  describe("a side with no usable price", () => {
+    const realPayloads: Array<[string, RawCoflnetPoint]> = [
+      ["NETHERRACK — both prices omitted", { maxBuy: 1, timestamp: "2026-08-26T00:00:00" }],
+      [
+        "GRAVEL — sell omitted, its max still present",
+        {
+          maxBuy: 3.4,
+          maxSell: 3.2,
+          minBuy: 0.1,
+          buy: 1.7,
+          buyVolume: 412975,
+          timestamp: "2026-08-26T00:00:00",
+        },
+      ],
+      [
+        "HARD_STONE — sell omitted on a heavily traded item",
+        {
+          maxBuy: 1,
+          maxSell: 0.2,
+          minBuy: 0.1,
+          buy: 0.7,
+          buyVolume: 297487,
+          timestamp: "2026-08-26T00:00:00",
+        },
+      ],
+      ["an explicit zero, not an omission", { ...base, sell: 0 }],
+    ];
+
+    for (const [label, raw] of realPayloads) {
+      it(`rejects as empty-side: ${label}`, () => {
+        const r = normalizeCoflnetPoint(raw, 3600);
+        expect(r.ok).toBe(false);
+        expect(r.ok === false && r.error).toBe("empty-side");
+      });
+    }
+
+    // The distinction is the whole point of the error code: a thin book is routine, and
+    // reporting it as malformed data sends someone looking for a bug that is not there.
+    it("is not reported as non-finite", () => {
+      const r = normalizeCoflnetPoint({ ...base, sell: undefined }, 3600);
+      expect(r.ok === false && r.error).not.toBe("non-finite");
+    });
+
+    // Guards the reason this is rejected at all: a zero bid would drag the weekly band's
+    // p10 toward a price no order can be placed at (CLAUDE.md §8).
+    it("never yields a bar with a zero side", () => {
+      for (const [, raw] of realPayloads) {
+        const r = normalizeCoflnetPoint(raw, 3600);
+        if (r.ok) expect(r.value.bidAvg).toBeGreaterThan(0);
+      }
+    });
+
+    // 0.1 is the bazaar's floor price and a legitimate bid. The rejection is of zero, not
+    // of "cheap" — an over-eager threshold here would discard every floor-priced item.
+    it("still accepts the smallest real bazaar price", () => {
+      const floor: RawCoflnetPoint = {
+        timestamp: base.timestamp,
+        buy: 0.2,
+        sell: 0.1,
+        maxBuy: 0.2,
+        minBuy: 0.2,
+        maxSell: 0.1,
+        minSell: 0.1,
+      };
+      const r = normalizeCoflnetPoint(floor, 3600);
+      expect(r.ok).toBe(true);
+      expect(r.ok && r.value.bidAvg).toBe(0.1);
+    });
   });
 
   it("rejects negative prices", () => {

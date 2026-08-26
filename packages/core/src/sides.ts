@@ -149,7 +149,17 @@ export interface RawBarSide {
   readonly movingWeek: number;
 }
 
-export type NormalizeError = "missing-field" | "non-finite" | "negative-price" | "crossed-book";
+export type NormalizeError =
+  | "missing-field"
+  | "non-finite"
+  | "negative-price"
+  | "crossed-book"
+  /**
+   * One side of the book had no usable price: zero, or absent because it was zero. A
+   * real rejection, but an unremarkable one — see `normalizeCoflnetPoint`. Kept distinct
+   * from `non-finite` so that a routine thin book is never reported as malformed data.
+   */
+  | "empty-side";
 
 /**
  * Order two interval sides deterministically. Average price is the real rule; the rest
@@ -226,9 +236,19 @@ export function isBarWellFormed(b: Bar): boolean {
  * coarsens the further back you go and omits them on some ranges.
  */
 export interface RawCoflnetPoint {
+  /**
+   * ISO-shaped, and in practice carries NO offset (`2026-08-26T08:00:00`). Read as UTC
+   * regardless — see `parseUtcMillis`. Do not hand this to `Date.parse` directly.
+   */
   readonly timestamp: string;
-  readonly buy: number;
-  readonly sell: number;
+  /**
+   * Optional, and this is not defensiveness — Coflnet omits a field whose value is zero
+   * (default-value JSON serialization) and rounds prices to one decimal, so a side that
+   * averaged 0.04 arrives absent rather than as `0.04`. Absent therefore means "zero, or
+   * near enough that Coflnet rounded it to zero", never "unknown".
+   */
+  readonly buy?: number;
+  readonly sell?: number;
   readonly minBuy?: number;
   readonly maxBuy?: number;
   readonly minSell?: number;
@@ -272,6 +292,25 @@ function toDataSource(s: string): DataSource {
 }
 
 /**
+ * Parse a Coflnet timestamp as UTC, whether or not it says so.
+ *
+ * Coflnet emits `2026-08-26T08:00:00` — ISO-shaped, with a time component and NO offset.
+ * ECMA-262 reads that form as LOCAL time, so `Date.parse` on a UTC-6 machine puts it at
+ * 14:00 UTC. Every backfilled row would then land six hours out, differently depending
+ * on who ran the script, and the hour-of-day profile — the one thing backfilled data
+ * exists to serve (ROADMAP Phase 3) — would be silently, unfalsifiably wrong.
+ *
+ * Timestamps in this project are UTC epoch seconds everywhere (CLAUDE.md section 5), so
+ * an absent offset means UTC. A date-only string is already UTC per spec and is left
+ * alone — appending `Z` to it would produce an unparseable value.
+ */
+function parseUtcMillis(timestamp: string): number {
+  const hasTime = /\d{2}:\d{2}/.test(timestamp);
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(timestamp);
+  return Date.parse(hasTime && !hasZone ? `${timestamp}Z` : timestamp);
+}
+
+/**
  * Normalize a Coflnet history point. This is one of only two places where the ask/bid
  * derivation actually runs — the other is normalizeQuickStatus. Everything else reads
  * already-derived data.
@@ -280,26 +319,45 @@ export function normalizeCoflnetPoint(
   raw: RawCoflnetPoint,
   intervalSeconds: number,
 ): Result<Bar, NormalizeError> {
-  const ms = Date.parse(raw.timestamp);
+  const ms = parseUtcMillis(raw.timestamp);
   if (!Number.isFinite(ms)) return err("missing-field");
 
-  const prices = [raw.buy, raw.sell];
+  const { buy, sell } = raw;
+
+  /**
+   * A side priced at zero — or absent, which for Coflnet means the same thing — is not a
+   * bar we can use, and it is the single most common thing Coflnet sends for a cheap or
+   * thin item. 6,835 buckets across 351 tags came back this way on the first production
+   * backfill, concentrated in items that trade at the 0.1 floor (NETHERRACK, HARD_STONE,
+   * GRAVEL) where a one-decimal average genuinely rounds to zero.
+   *
+   * Rejecting is deliberate, not incidental. The weekly band takes p10 of `bid_avg` to
+   * decide where to place a buy order (CLAUDE.md section 8); admitting bars with
+   * `bid = 0` would drag that percentile toward zero and have the site recommend an
+   * order at a price no order can be placed at — a number that looks like a trade and is
+   * not one. Skipping the bucket loses one hour; keeping it corrupts the whole band.
+   */
+  if (buy === undefined || sell === undefined || buy === 0 || sell === 0) {
+    return err("empty-side");
+  }
+
+  const prices = [buy, sell];
   if (!prices.every((n) => Number.isFinite(n))) return err("non-finite");
   if (prices.some((n) => n < 0)) return err("negative-price");
 
   // Missing min/max degrade to the average: a flat bar, which is exactly what a single
   // observation means. Never invent a range that was not measured.
   const buySide: RawBarSide = {
-    avg: raw.buy,
-    min: raw.minBuy ?? raw.buy,
-    max: raw.maxBuy ?? raw.buy,
+    avg: buy,
+    min: raw.minBuy ?? buy,
+    max: raw.maxBuy ?? buy,
     volume: raw.buyVolume ?? 0,
     movingWeek: raw.buyMovingWeek ?? 0,
   };
   const sellSide: RawBarSide = {
-    avg: raw.sell,
-    min: raw.minSell ?? raw.sell,
-    max: raw.maxSell ?? raw.sell,
+    avg: sell,
+    min: raw.minSell ?? sell,
+    max: raw.maxSell ?? sell,
     volume: raw.sellVolume ?? 0,
     movingWeek: raw.sellMovingWeek ?? 0,
   };

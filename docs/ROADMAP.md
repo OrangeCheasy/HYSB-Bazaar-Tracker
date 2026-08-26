@@ -150,11 +150,55 @@ broken the ingest and confirmed `runs` recorded the failure.
 
 ## Phase 3 — Historical backfill
 
-**Status: deferred by decision, 2026-08-25. Re-scoped 2026-08-26 by the 30-day cap.** Not
-skipped for lack of time — deferring is free and delaying Phase 2 is not. Coflnet's
-history stays available; our own five-minute history exists only if the cron was running
-at the time. So production ingestion went first. `scripts/backfill.ts` is still a stub.
-See ADR in `docs/DECISIONS.md`.
+**Status: BUILT 2026-08-26, not yet run against production.** `scripts/backfill.ts` is a
+real script; typecheck and lint are clean. Verified against the **local** D1 rather than
+asserted:
+
+- `--days 45` is rejected with the retention reason. `--dry-run` against production reads
+  **793 Tier A tags → 3,965 requests → ~1h 9m**, matching CLAUDE.md §2's measured count.
+- A `COAL` run offered 158 rows and inserted **2** — the other 156 bounced off rows we
+  already held, so a re-run is a no-op by construction and our own 12-sample rows are
+  never displaced by a coarser Coflnet bar (ADR-031). A second full run changed the row
+  count by zero.
+- Resume verified by **SIGKILL**, not by a signal handler that might not fire: killed at
+  36s, 25 of 30 tags were durably recorded, and the next run picked up exactly the
+  remaining 5.
+- The audit found real gaps on its first run — the two hours between the local fixture's
+  last row and Coflnet's newest bucket — so the second job works, not just the first.
+
+Three things came out of building it that the plan below did not anticipate. Coflnet's
+resolution follows the **requested span**, not the age of the data, which is why the job
+is 3,965 requests and not 793 (ADR-030). Coflnet's timestamps carry **no UTC offset**, so
+`normalizeCoflnetPoint` was silently shifting every bar by the runner's local offset —
+fixed in `packages/core` with three tests, and it would have been invisible to every
+existing check (ADR-032). And the ESLint boundary this phase asks for had to be scoped to
+`src/**` alone: flat config replaces rather than merges a repeated rule, so a block naming
+core and web too would have quietly deleted their platform-free boundaries.
+
+**Production run completed 2026-08-26, 1h 18m.** 465,550 rows landed across 707 tags, and
+**686 tags now have ≥120 hourly rows in the trailing 7 days** — enough to compute a weekly
+band, against zero the day before. The handoff is clean: Coflnet's newest row is
+`2026-08-25 21:00`, our own ingest's oldest is `2026-08-25 22:00` — contiguous, no overlap,
+no gap. D1 is at 97 MB, ~1% of the cap.
+
+The audit reported no gaps, which is true but not yet informative: our own collection was
+~23 hours old, so there was almost nothing to compare against. That check earns its keep
+in a week or two, not today.
+
+The run also reported `6,835 malformed buckets rejected`, which was a mislabel, not a
+fault — thin books at the 0.1 floor where Coflnet omits a zero-valued price. Diagnosed and
+fixed the same day (ADR-031); the rejection was correct, its description was not. No
+re-run needed, and none was done.
+
+**Still open:**
+
+- **The Done-when below cannot be met as written.** 86 Tier A tags have no Coflnet history
+  at all — every one an `ENCHANTMENT_*` book — and 14 more kept under half their buckets.
+  That is an upstream fact, not a defect, so the clause needs amending rather than chasing.
+- A separate bug surfaced while verifying this and belongs to the **ingest** path, not the
+  backfill: 9,324 `source='hypixel'` rows across 563 tags carry a zero price, and
+  `computeBand` applies no zero filter. For **11 of 706** band-eligible tags the p10 buy
+  band is therefore 0, and `spreadPct` divides by it. Not caused by Phase 3; found by it.
 
 **The 30-day cap changed what this phase is for, and bounded it.** Backfilling further
 than 30 days is now actively pointless — the next nightly prune deletes it. So the ceiling
@@ -178,8 +222,12 @@ profiling, which wants 14+ days. If Phase 2 has been running for three weeks by 
 you get here, you may not need this phase at all.
 
 Do it anyway, for one reason: cross-referencing Coflnet against your own rows is how you
-detect gaps in your collection. At ~150 tags and one request per tag, it is a 95-second
-job. The rate limit is a one-time cost, not an ongoing constraint.
+detect gaps in your collection. ~~At ~150 tags and one request per tag, it is a 95-second
+job.~~ **Wrong by a factor of 43, measured 2026-08-26:** Tier A is 793 tags since the book
+clause (CLAUDE.md §2), and Coflnet's resolution follows the requested span, so 30 days
+needs five 7-day requests per tag rather than one — 3,965 requests and **~69 minutes**
+(ADR-030). Still a one-time cost, but a run you start deliberately rather than
+absent-mindedly, which is why it prints its ETA first and is resumable.
 
 Deliverables:
 
@@ -192,9 +240,19 @@ Deliverables:
 
 Watch for:
 
-- SkyCofl coarsens resolution the further back you go; do not assume even spacing
-- This script must never end up imported by the Worker. Enforce with an ESLint boundary
-  rule if you can be bothered — a comment is not enforcement
+- ~~SkyCofl coarsens resolution the further back you go~~ — **it coarsens by the span you
+  request, not by age.** A 1-day window 29 days back still returns 2h buckets; an 8-day
+  window returns daily ones. Ask for 30 days in one call and you get 30 points and no
+  hour-of-day profile at all (ADR-030). Spacing is still uneven — Coflnet drops buckets
+  where it has no data — so do not assume it.
+- Coflnet's timestamps have **no UTC offset**, and `Date.parse` reads that as local time
+  (ADR-032). Handled in `packages/core` now; do not re-introduce it in a new caller.
+- This script must never end up imported by the Worker. ~~Enforce with an ESLint boundary
+  rule if you can be bothered~~ — done: `NO_SCRIPTS_IMPORT` in `eslint.config.mjs`. Note
+  it is applied to `src/**` in its own block and appended by hand inside the existing
+  `packages/core` and `web/src` blocks, because flat config **replaces** a repeated rule
+  rather than merging it — one block naming all three would have silently deleted the
+  platform-free boundaries those blocks exist to enforce.
 
 **Done when:** every Tier A tag has a full 30 days of `hourly` rows with no gaps, and
 re-running the script is a no-op rather than a duplicate. Never request a range older than
@@ -299,6 +357,15 @@ tag~~ (code complete; data-gated until 24h of `hourly` accumulates — see TODO.
 
 ## Phase 5 — Frontend
 
+**Status: BUILT, NOT SIGNED OFF — 2026-08-26.** All six views are implemented on branch
+`v0.5`, `npm run typecheck` and `npm run lint` are clean, and every non-negotiable UI rule
+below is enforced structurally rather than by convention. What is missing is the
+_verification_: none of the three Done-when gates has been run, because the local toolchain
+cannot produce a build. See ADR-029 — Smart App Control blocks Vite 8's unsigned Rolldown
+binding, which takes out `npm run build`, `npm test` and `npm run dev:web` together. The fix
+is a machine setting and a reboot, not a code change; until then the last green test run is
+Phase 4.5's 349.
+
 **Goal:** the interactive site.
 **Effort:** 4–6 evenings, the largest phase
 
@@ -336,6 +403,47 @@ Non-negotiable UI rules:
 - Data age is always visible, not in a tooltip
 - Anything resting on fewer than 4 weeks says so where the number is, not in a footnote
 - Mobile works — a lot of this gets checked on a phone next to a game session
+
+### What shipped
+
+| View                 | Route             | File                                |
+| -------------------- | ----------------- | ----------------------------------- |
+| Band table (landing) | `/`               | `web/src/views/BandsView.tsx`       |
+| Band detail          | `/bands/:tag`     | `web/src/views/BandDetailView.tsx`  |
+| Scan table           | `/scan`           | `web/src/views/ScanView.tsx`        |
+| Craft detail         | `/craft/:baseTag` | `web/src/views/CraftDetailView.tsx` |
+| Item page            | `/item/:tag`      | `web/src/views/ItemDetailView.tsx`  |
+| Settings drawer      | (layout)          | `web/src/app/SettingsDrawer.tsx`    |
+
+Bands sit at `/` rather than `/bands` because they are what someone opens before setting up
+orders for the evening; the ranked craft scan is the secondary view. A seventh route,
+`/items` (`ItemsView.tsx`), was added beyond the plan as a searchable index — the item page
+is useless without a way to reach a tag by name.
+
+**How the non-negotiables are held.** Not by review discipline:
+
+- `ui/pairedColumns.ts` makes a lone margin column or a lone band column
+  **unconstructible** — the factory returns a tuple of two and nothing else builds one
+  (ADR-027). Adjacency survives the sub-640px collapse to `display: grid`.
+- `ScanTable.tsx` marks unverified recipes on the recipe cell itself, and `CraftFlags.tsx`
+  deliberately drops `unverified-recipe` from the chip row so the marking is not duplicated
+  into noise. All 43 recipes ship unverified, so this is the default path, not an edge case.
+- `BandTable.tsx` renders `n=Nw` inline whenever `weekCount < 4`; `ItemDetailView.tsx` does
+  the same for a volatility computed over a short window.
+- `DataAge` lives in `Header.tsx`, so it is on every route and never in a tooltip.
+- `Footer.tsx` carries the SkyCofl attribution and the Hypixel/Mojang disclaimer in the
+  layout rather than a view, so no route can ship without them.
+- `charts/lazy.tsx` keeps Recharts off the landing route entirely (ADR-028).
+
+### What remains
+
+Only verification — no known missing feature:
+
+1. Lighthouse performance >90 on the landing route.
+2. A real 375px pass, not a static reading of the Tailwind breakpoints.
+3. The comprehension check on "crafts/day".
+
+All three need a build, so all three are blocked on ADR-029.
 
 **Done when:** Lighthouse performance >90, the site is usable at 375px wide, and someone
 who has never seen it can explain what "crafts/day" means from the UI alone.

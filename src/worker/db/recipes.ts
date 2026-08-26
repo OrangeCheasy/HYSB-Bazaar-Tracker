@@ -1,3 +1,4 @@
+import type { RecipeKind } from "@core/index.js";
 import { chunkByParamCount } from "./chunk.js";
 
 /**
@@ -15,7 +16,10 @@ import { chunkByParamCount } from "./chunk.js";
  * rule applied to tier assignment.
  */
 
-export type RecipeKind = "compact" | "anvil";
+/** Domain type, declared in packages/core/src/recipes.ts and re-exported here so the
+ *  existing `db/recipes.js` import sites keep working. The web client imports it from
+ *  core directly — `web/` cannot reach into `src/worker/`. */
+export type { RecipeKind };
 
 export interface RecipeRow {
   readonly id: number;
@@ -29,9 +33,7 @@ export interface RecipeRow {
 
 const COLUMNS = "id, base_tag, ench_tag, ratio, verified, note, kind";
 
-export async function selectAllRecipes(
-  db: Pick<D1Database, "prepare">,
-): Promise<RecipeRow[]> {
+export async function selectAllRecipes(db: Pick<D1Database, "prepare">): Promise<RecipeRow[]> {
   const { results } = await db
     .prepare(`SELECT ${COLUMNS} FROM recipes ORDER BY base_tag, ench_tag`)
     .all<RecipeRow>();

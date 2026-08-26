@@ -132,5 +132,39 @@ export {
   parityPrice,
   validateRecipe,
   type Recipe,
+  type RecipeKind,
   type RecipeIssue,
 } from "./recipes.js";
+
+export {
+  BAND_PARAM_RANGES,
+  DEFAULT_BAND_QUERY,
+  DEFAULT_SCAN_QUERY,
+  SCAN_PARAM_RANGES,
+  checkParam,
+  checkParamValue,
+  type BandParamName,
+  type ParamCheck,
+  type ParamRange,
+  type ScanParamName,
+} from "./params.js";
+
+export type {
+  BandPayload,
+  BandScanRow,
+  ChartPoint,
+  CraftRow,
+  Envelope,
+  ErrorEnvelope,
+  HealthPayload,
+  HourProfilePayload,
+  ItemStatsPayload,
+  Meta,
+  RecipesPayload,
+  RowCounts,
+  RunKind,
+  RunStatus,
+  ScanRow,
+  StatsWindow,
+  StatusPayload,
+} from "./wire.js";

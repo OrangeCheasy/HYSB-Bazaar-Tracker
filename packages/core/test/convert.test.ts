@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  cheapestPath,
-  type AcquisitionPrice,
-  type ConversionEdge,
-} from "../src/convert.js";
+import { cheapestPath, type AcquisitionPrice, type ConversionEdge } from "../src/convert.js";
 
 function edge(
   from: string,

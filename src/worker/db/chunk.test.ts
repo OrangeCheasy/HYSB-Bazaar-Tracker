@@ -20,7 +20,10 @@ describe("chunkByParamCount", () => {
 
   it("honors a custom maxParams", () => {
     const rows = Array.from({ length: 5 }, (_, i) => i);
-    expect(chunkByParamCount(rows, 3, 10)).toEqual([[0, 1, 2], [3, 4]]);
+    expect(chunkByParamCount(rows, 3, 10)).toEqual([
+      [0, 1, 2],
+      [3, 4],
+    ]);
   });
 
   it("never produces a zero-row chunk even if paramsPerRow exceeds maxParams", () => {

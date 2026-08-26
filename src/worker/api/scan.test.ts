@@ -12,7 +12,11 @@ describe("handleScan — stale data", () => {
     const staleGeneratedAt = now - 5 * 3600;
     const stalePayload = {
       data: [{ recipe: { baseTag: "COAL", enchTag: "ENCHANTED_COAL" }, analysis: undefined }],
-      meta: { generatedAt: staleGeneratedAt, staleAfter: staleGeneratedAt + 2 * 3600, source: "kv" },
+      meta: {
+        generatedAt: staleGeneratedAt,
+        staleAfter: staleGeneratedAt + 2 * 3600,
+        source: "kv",
+      },
     };
 
     const kv = makeFakeKV({ [SCAN_KV_KEY]: JSON.stringify(stalePayload) });
@@ -42,7 +46,10 @@ describe("handleScan — stale data", () => {
     const res = await handleScan(new URL("https://bazaar.example/api/scan"), env);
     expect(res.status).toBe(200);
 
-    const body = (await res.json()) as { data: unknown; meta: { source: string; generatedAt: number } };
+    const body = (await res.json()) as {
+      data: unknown;
+      meta: { source: string; generatedAt: number };
+    };
     expect(body.meta.source).toBe("d1");
     expect(body.data).toEqual([]);
   });

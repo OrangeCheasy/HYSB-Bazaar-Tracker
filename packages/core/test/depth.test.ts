@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assignDepthToSides,
-  computeDepthMetrics,
-  type RawOrderLevel,
-} from "../src/depth.js";
+import { assignDepthToSides, computeDepthMetrics, type RawOrderLevel } from "../src/depth.js";
 import { normalizeQuickStatus, type RawQuickStatus } from "../src/sides.js";
 import { makePoint } from "./helpers.js";
 

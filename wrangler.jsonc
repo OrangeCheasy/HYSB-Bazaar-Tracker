@@ -1,77 +1,72 @@
 {
-	"$schema": "./node_modules/wrangler/config-schema.json",
-	// MUST match the Worker name in the Cloudflare dashboard exactly, or Workers Builds
-	// fails the build. This is connected to github.com/OrangeCheasy/HYSB-BazzarTracker.
-	"name": "hysb-bazaartracker",
-	"main": "./src/worker/index.ts",
-	"compatibility_date": "2026-08-24",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
-	"assets": {
-		"directory": "./dist/client",
-		"binding": "ASSETS",
-		"not_found_handling": "single-page-application",
-		// "/__scheduled" is what `wrangler dev --test-scheduled` posts cron events to.
-		// Without it here, the asset router answers first and not_found_handling serves
-		// index.html, so the scheduled handler never runs and local cron testing silently
-		// does nothing. In production the path is unused and falls through to assets.
-		"run_worker_first": [
-			"/api/*",
-			"/__scheduled*"
-		]
-	},
-	"observability": {
-		"enabled": true
-	},
-	"triggers": {
-		// Kept in sync by hand with the CRON_* constants in src/worker/index.ts.
-		"crons": [
-			"*/5 * * * *", // ingest
-			"7 * * * *", // hourly rollup + precompute
-			"23 4 * * *" // daily rollup + prune
-		]
-	},
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "bazaar",
-			"database_id": "0a8c65e6-4fd8-4407-877d-3d784a4d9609",
-			"migrations_dir": "./migrations"
-		}
-	],
-	// No "remote": true here, deliberately. With it, `wrangler dev` reads AND WRITES the
-	// production KV namespace — on 2026-08-25 a dev session left a junk scan payload in
-	// production that `/api/scan` then served for hours. KV is written by cron only
-	// (CLAUDE.md section 3), so local dev has no business writing it. Local dev gets an
-	// empty namespace and /api/scan takes its live-D1 fallback, which is the path worth
-	// exercising locally anyway. Re-add the flag only for a deliberate read-only check,
-	// and remove it again afterwards.
-	"kv_namespaces": [
-		{
-			"binding": "CACHE",
-			"id": "e80f2459ff5d4b32b14270ee2cf0eaa0"
-		}
-	],
-	// Bucket must exist before this binding works: `npx wrangler r2 bucket create
-	// bazaar-archive`. Raw order-book archive, one small object per ingest tick under
-	// archive/{YYYY-MM-DD}/{HHmm}.json.gz — see CLAUDE.md section 3 for the retention
-	// policy (full order books 14 days, quick_status only beyond).
-	"r2_buckets": [
-		{
-			"binding": "ARCHIVE",
-			"bucket_name": "bazaar-archive"
-		}
-	],
-	"vars": {
-		"ENVIRONMENT": "production",
-		"HYPIXEL_BAZAAR_URL": "https://api.hypixel.net/v2/skyblock/bazaar"
-	}
-	// No named environments on purpose. Wrangler does NOT inherit d1_databases or
-	// kv_namespaces into a named env, so the old "preview" env deployed a Worker with
-	// live crons and no DB binding — the ingest would have crashed every 5 minutes.
-	//
-	// A real preview env needs its own D1 database and KV namespace, so that preview
-	// runs cannot write into production data. Add it when PR previews are actually
-	// wanted, with all four keys: name, vars, d1_databases, kv_namespaces.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // MUST match the Worker name in the Cloudflare dashboard exactly, or Workers Builds
+  // fails the build. This is connected to github.com/OrangeCheasy/HYSB-BazzarTracker.
+  "name": "hysb-bazaartracker",
+  "main": "./src/worker/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // "/__scheduled" is what `wrangler dev --test-scheduled` posts cron events to.
+    // Without it here, the asset router answers first and not_found_handling serves
+    // index.html, so the scheduled handler never runs and local cron testing silently
+    // does nothing. In production the path is unused and falls through to assets.
+    "run_worker_first": ["/api/*", "/__scheduled*"],
+  },
+  "observability": {
+    "enabled": true,
+  },
+  "triggers": {
+    // Kept in sync by hand with the CRON_* constants in src/worker/index.ts.
+    "crons": [
+      "*/5 * * * *", // ingest
+      "7 * * * *", // hourly rollup + precompute
+      "23 4 * * *", // daily rollup + prune
+    ],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bazaar",
+      "database_id": "0a8c65e6-4fd8-4407-877d-3d784a4d9609",
+      "migrations_dir": "./migrations",
+    },
+  ],
+  // No "remote": true here, deliberately. With it, `wrangler dev` reads AND WRITES the
+  // production KV namespace — on 2026-08-25 a dev session left a junk scan payload in
+  // production that `/api/scan` then served for hours. KV is written by cron only
+  // (CLAUDE.md section 3), so local dev has no business writing it. Local dev gets an
+  // empty namespace and /api/scan takes its live-D1 fallback, which is the path worth
+  // exercising locally anyway. Re-add the flag only for a deliberate read-only check,
+  // and remove it again afterwards.
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "e80f2459ff5d4b32b14270ee2cf0eaa0",
+    },
+  ],
+  // Bucket must exist before this binding works: `npx wrangler r2 bucket create
+  // bazaar-archive`. Raw order-book archive, one small object per ingest tick under
+  // archive/{YYYY-MM-DD}/{HHmm}.json.gz — see CLAUDE.md section 3 for the retention
+  // policy (full order books 14 days, quick_status only beyond).
+  "r2_buckets": [
+    {
+      "binding": "ARCHIVE",
+      "bucket_name": "bazaar-archive",
+    },
+  ],
+  "vars": {
+    "ENVIRONMENT": "production",
+    "HYPIXEL_BAZAAR_URL": "https://api.hypixel.net/v2/skyblock/bazaar",
+  },
+  // No named environments on purpose. Wrangler does NOT inherit d1_databases or
+  // kv_namespaces into a named env, so the old "preview" env deployed a Worker with
+  // live crons and no DB binding — the ingest would have crashed every 5 minutes.
+  //
+  // A real preview env needs its own D1 database and KV namespace, so that preview
+  // runs cannot write into production data. Add it when PR previews are actually
+  // wanted, with all four keys: name, vars, d1_databases, kv_namespaces.
 }

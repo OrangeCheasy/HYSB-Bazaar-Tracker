@@ -1,6 +1,9 @@
 import {
+  DEFAULT_SCAN_QUERY,
+  SCAN_PARAM_RANGES,
   bestSellWindow,
   bookTagFor,
+  checkParam,
   cheapestPath,
   computeHourProfile,
   detectMergeGates,
@@ -12,16 +15,17 @@ import {
   parseBookTag,
   sliceWindow,
   analyzeCraft,
+  type ScanParamName,
+  type ScanRow,
   type Bar,
   type ConversionEdge,
-  type ConversionPlan,
   type CraftAnalysis,
   type HourProfile,
   type MarketConfig,
   type Recipe,
 } from "@core/index.js";
 import { selectHourlyBarsForTag } from "./db/history.js";
-import { selectRecipesByKind, type RecipeKind, type RecipeRow } from "./db/recipes.js";
+import { selectRecipesByKind, type RecipeRow } from "./db/recipes.js";
 
 /**
  * Orchestration shared by `/api/scan`, `/api/craft/:baseTag`, and `precompute.ts`: pull
@@ -31,24 +35,25 @@ import { selectRecipesByKind, type RecipeKind, type RecipeRow } from "./db/recip
  * is exactly the platform I/O core is not allowed to do.
  */
 
+/** The numbers themselves live in `DEFAULT_SCAN_QUERY` (packages/core/src/params.ts),
+ *  alongside the ranges that validate them, so the Worker and the settings drawer cannot
+ *  disagree about what "unset" means — which matters because `/api/scan` only takes the
+ *  KV fast path when every parameter is exactly the default. */
 export const DEFAULT_MARKET: MarketConfig = {
-  sellTaxRate: 0.0125,
-  captureFraction: 0.2,
-  // Flat 1-coin step. A single global tick is a simplification (a cheap material and a
-  // pricey enchanted one deserve different step sizes), but it matches the shape of
-  // MarketConfig today and is overridable per-request via `?tick=`.
-  tick: 1,
+  sellTaxRate: DEFAULT_SCAN_QUERY.tax,
+  captureFraction: DEFAULT_SCAN_QUERY.capture,
+  tick: DEFAULT_SCAN_QUERY.tick,
   taxOnInstantSell: true,
 };
 
 /** Default overnight buy window, UTC. `timedBuyWindowBid` averages the bid over this
  *  FIXED span (CLAUDE.md's "the hours your order sits unattended"), not the cheapest
  *  hours found by search — that distinction is packages/core/economics.ts's, not ours. */
-export const DEFAULT_SLEEP_START = 23;
-export const DEFAULT_SLEEP_END = 7;
+export const DEFAULT_SLEEP_START = DEFAULT_SCAN_QUERY.sleepStart;
+export const DEFAULT_SLEEP_END = DEFAULT_SCAN_QUERY.sleepEnd;
 
 /** Length of the searched sell window; the search itself picks WHEN. */
-export const DEFAULT_SELL_WINDOW_HOURS = 8;
+export const DEFAULT_SELL_WINDOW_HOURS = DEFAULT_SCAN_QUERY.window;
 
 /** How far back to fetch. One fetch covers both the hour-of-day profile (wants 14+
  *  days per ROADMAP Phase 3) and every Stats window up to 30d, via sliceWindow -- so
@@ -155,14 +160,18 @@ export async function buildCraftAnalysis(
   const productWindow = sliceWindow(productSeries.bars, statsSinceTs, now);
 
   const baseStats = computeStats(baseWindow.length > 0 ? baseWindow : baseSeries.bars);
-  const productStats = computeStats(productWindow.length > 0 ? productWindow : productSeries.bars);
+  const productStats = computeStats(
+    productWindow.length > 0 ? productWindow : productSeries.bars,
+  );
   if (!baseStats.ok) return { error: baseStats.error, dataTo };
   if (!productStats.ok) return { error: productStats.error, dataTo };
 
   const baseProfile = computeHourProfile(baseSeries.bars);
   const productProfile = computeHourProfile(productSeries.bars);
   const timedBuyWindowBid = baseProfile.ok ? timedBuyBid(baseProfile.value, params) : undefined;
-  const timedSellWindowAsk = productProfile.ok ? timedSellAsk(productProfile.value, params) : undefined;
+  const timedSellWindowAsk = productProfile.ok
+    ? timedSellAsk(productProfile.value, params)
+    : undefined;
 
   const result = analyzeCraft({
     recipe,
@@ -179,18 +188,11 @@ export async function buildCraftAnalysis(
   return { analysis: result.value, dataTo };
 }
 
-export interface ScanRow {
-  readonly recipe: Recipe;
-  readonly analysis?: CraftAnalysis;
-  readonly error?: string;
-  /** Which craft type produced this row. Compaction and anvil rank in ONE list ordered by
-   *  profit/day (CLAUDE.md section 8) — they compete for the same capital, so splitting
-   *  them into separate leaderboards would hide the comparison that matters. */
-  readonly kind: RecipeKind;
-  /** Anvil only: the chosen route. Carries the entry rung and what it cost, which Phase 5
-   *  surfaces so the entry choice is visible rather than implicit. */
-  readonly plan?: ConversionPlan;
-}
+/** One scan row: recipe, its analysis (or why there isn't one), which craft type produced
+ *  it, and for anvil the chosen route. Shape lives in `packages/core/src/wire.ts` — it is
+ *  what `/api/scan` puts on the wire, so the client must be able to import it without
+ *  reaching into `src/worker/`. Re-exported here because this is where it is built. */
+export type { ScanRow };
 
 export interface ScanResult {
   readonly rows: readonly ScanRow[];
@@ -258,22 +260,6 @@ export async function runScan(
   };
 }
 
-/** Allowed range for each query parameter, with the message shown when it is missed.
- *  Ranges are deliberately wider than reality (real sell tax tops out near 2.25% under
- *  Mayor Aura) — the job here is to catch inputs that are wrong by a FACTOR, not to
- *  second-guess a user who wants to model something unusual. */
-const PARAM_RANGES = {
-  // The percent-vs-fraction trap: `?tax=1.25` meaning "1.25%" is 100x too big and,
-  // unvalidated, renders every craft as a catastrophic loss with no error shown.
-  tax: { min: 0, max: 0.5, hint: "a fraction, so 1.25% is 0.0125" },
-  capture: { min: 0, max: 1, hint: "a fraction of market volume between 0 and 1" },
-  tick: { min: 0.000001, max: 1_000_000, hint: "a positive price step in coins" },
-  sleepStart: { min: 0, max: 23, hint: "an hour of the day, 0-23 UTC" },
-  sleepEnd: { min: 0, max: 23, hint: "an hour of the day, 0-23 UTC" },
-  window: { min: 1, max: 24, hint: "a sell-window length in hours, 1-24" },
-  capital: { min: 0, max: Number.MAX_SAFE_INTEGER, hint: "a non-negative coin amount" },
-} as const;
-
 export type ScanQueryParams = { params: ScanParams; capitalAvailable?: number };
 export type ParseResult =
   | { readonly ok: true; readonly value: ScanQueryParams }
@@ -291,20 +277,15 @@ export function parseScanQueryParams(url: URL): ParseResult {
   const sp = url.searchParams;
   let failure: string | undefined;
 
-  const num = (key: keyof typeof PARAM_RANGES, fallback: number): number => {
-    const raw = sp.get(key);
-    if (raw === null || raw === "") return fallback;
-    const n = Number(raw);
-    const { min, max, hint } = PARAM_RANGES[key];
-    if (!Number.isFinite(n)) {
-      failure ??= `'${key}' must be a number (${hint}); got '${raw}'`;
-      return fallback;
-    }
-    if (n < min || n > max) {
-      failure ??= `'${key}' must be between ${min} and ${max} — ${hint}; got ${n}`;
-      return fallback;
-    }
-    return n;
+  // First failure wins and parsing continues, rather than returning early: reporting the
+  // first bad parameter is enough to act on, and the straight-line shape below stays
+  // readable. Ranges and messages come from core so the settings drawer validates against
+  // the identical table (packages/core/src/params.ts).
+  const num = (key: ScanParamName, fallback: number): number => {
+    const checked = checkParam(key, SCAN_PARAM_RANGES[key], sp.get(key), fallback);
+    if (checked.ok) return checked.value;
+    failure ??= checked.message;
+    return fallback;
   };
 
   const market: MarketConfig = {

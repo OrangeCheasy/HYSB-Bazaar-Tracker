@@ -22,18 +22,18 @@ npm run db:migrate                        # apply migrations/ to the remote D1
 
 ## Commands
 
-| | |
-|---|---|
-| `npm run dev` | `wrangler dev` — Worker + local D1/KV |
-| `npm run dev:web` | Vite alone, proxying `/api` to `wrangler dev` on :8787 |
-| `npm run build` | `vite build` → `dist/client` |
-| `npm test` | vitest over `packages/core` |
-| `npm run typecheck` | worker + core + web |
-| `npm run lint` | eslint |
-| `npm run deploy` | `wrangler deploy` (CI does this — avoid running locally) |
-| `npm run db:migrate` | apply migrations to remote D1 |
-| `npm run db:migrate:local` | apply migrations to local D1 |
-| `npm run backfill -- --tag COAL --days 30` | local-only history seed |
+|                                            |                                                          |
+| ------------------------------------------ | -------------------------------------------------------- |
+| `npm run dev`                              | `wrangler dev` — Worker + local D1/KV                    |
+| `npm run dev:web`                          | Vite alone, proxying `/api` to `wrangler dev` on :8787   |
+| `npm run build`                            | `vite build` → `dist/client`                             |
+| `npm test`                                 | vitest over `packages/core`                              |
+| `npm run typecheck`                        | worker + core + web                                      |
+| `npm run lint`                             | eslint                                                   |
+| `npm run deploy`                           | `wrangler deploy` (CI does this — avoid running locally) |
+| `npm run db:migrate`                       | apply migrations to remote D1                            |
+| `npm run db:migrate:local`                 | apply migrations to local D1                             |
+| `npm run backfill -- --tag COAL --days 30` | local-only history seed                                  |
 
 ## Layout
 

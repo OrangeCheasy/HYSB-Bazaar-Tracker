@@ -25,6 +25,14 @@ export const RATIO_EXCEPTIONS: Readonly<Record<string, number>> = {
 const MIN_RATIO = 1;
 const MAX_RATIO = 10_000;
 
+/**
+ * Which craft type a recipe describes. Compaction is a fixed n:1 ratio; anvil is a 2:1
+ * merge edge in an enchant family's level chain (CLAUDE.md section 8). Both live in the
+ * same `recipes` table and both rank in the same scan, so the discriminator is domain
+ * data rather than a storage detail — it belongs here, not in the D1 layer.
+ */
+export type RecipeKind = "compact" | "anvil";
+
 export interface Recipe {
   /** Null until persisted — recipes are seeded by hand before they get an id. */
   readonly id: number | null;

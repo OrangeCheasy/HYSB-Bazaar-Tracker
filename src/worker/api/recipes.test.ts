@@ -28,7 +28,14 @@ describe("handleRecipes — meta independent of ingest staleness", () => {
       meta: { generatedAt: number; staleAfter: number; source: string };
     };
     expect(body.data).toEqual([
-      { id: 1, baseTag: "COAL", enchTag: "ENCHANTED_COAL", ratio: 160, verified: true, note: null },
+      {
+        id: 1,
+        baseTag: "COAL",
+        enchTag: "ENCHANTED_COAL",
+        ratio: 160,
+        verified: true,
+        note: null,
+      },
     ]);
     // generatedAt is "now" — the only honest answer when there is no data timestamp to
     // report — bracketed loosely since the request itself takes nonzero time.

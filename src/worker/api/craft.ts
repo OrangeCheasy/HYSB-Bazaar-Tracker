@@ -1,3 +1,4 @@
+import type { CraftRow } from "@core/index.js";
 import { selectRecipesByBaseTag } from "../db/recipes.js";
 import type { Env } from "../index.js";
 import { buildCraftAnalysis, parseScanQueryParams, toRecipe } from "../scan.js";
@@ -46,8 +47,13 @@ export async function handleCraft(baseTag: string, url: URL, env: Env): Promise<
     if (r.analysis !== undefined && r.dataTo < dataTo) dataTo = r.dataTo;
   }
 
+  const payload: CraftRow[] = results.map(({ recipe, analysis, error }) => ({
+    recipe,
+    analysis,
+    error,
+  }));
   return json(
-    results.map(({ recipe, analysis, error }) => ({ recipe, analysis, error })),
+    payload,
     { generatedAt: dataTo, staleAfter: dataTo + 3600, source: "d1" },
     200,
     // This is the page a user is actively deciding on right now, so it stays closer to

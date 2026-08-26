@@ -259,9 +259,9 @@ export async function runDailyRollup(env: Env): Promise<void> {
       );
     }
 
-    const snapshotCountRow = await env.DB.prepare(
-      "SELECT COUNT(*) as n FROM snapshots",
-    ).first<{ n: number }>();
+    const snapshotCountRow = await env.DB.prepare("SELECT COUNT(*) as n FROM snapshots").first<{
+      n: number;
+    }>();
     const hourlyCountRow = await env.DB.prepare("SELECT COUNT(*) as n FROM hourly").first<{
       n: number;
     }>();

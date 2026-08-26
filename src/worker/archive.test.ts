@@ -81,11 +81,7 @@ describe("pruneArchiveExpired", () => {
     const edge = dateNDaysBefore(29);
     const stale = dateNDaysBefore(45);
 
-    const { env, store } = makeFakeR2([
-      ...dayKeys(fresh),
-      ...dayKeys(edge),
-      ...dayKeys(stale),
-    ]);
+    const { env, store } = makeFakeR2([...dayKeys(fresh), ...dayKeys(edge), ...dayKeys(stale)]);
 
     const result = await pruneArchiveExpired(env, NOW);
 

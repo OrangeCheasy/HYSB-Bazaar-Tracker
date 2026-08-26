@@ -29,8 +29,9 @@ detection unfalsifiable and self-correcting if an upstream field is ever renamed
 Volume/moving-week fields pair to whichever side shares their prefix.
 
 **Consequences for the product's core math:**
+
 - A buy order fills near `bid`. A sell offer fills near `ask`.
-- ask→bid ("instant both ways") is the *floor* scenario. bid→ask is the realistic case
+- ask→bid ("instant both ways") is the _floor_ scenario. bid→ask is the realistic case
   **conditional on both orders filling**, which is why every profit figure must be shown
   alongside a fill-feasibility number.
 
@@ -80,10 +81,10 @@ We do **not** store five-minute rows for all 2,136 products. Coverage is the lev
 controls write volume; **retention is capped at 30 days everywhere** (§3), so nothing in
 this system grows without bound.
 
-| Tier | Which tags | Storage |
-|---|---|---|
+| Tier  | Which tags                                                                                                                             | Storage                                         |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | **A** | recipe tags, **plus** any tag in the top ~500 by `sellMovingWeek`, **plus** the lowest- and highest-level book of every enchant family | 5-min `snapshots` pruned at 7d, `hourly` at 30d |
-| **B** | everything else | `hourly` only, no snapshots, 30d |
+| **B** | everything else                                                                                                                        | `hourly` only, no snapshots, 30d                |
 
 Tier A membership is **recomputed each run**, not a static list. A tag that starts trading
 gets promoted automatically; a dead one falls out. Promotion must never require a
@@ -95,10 +96,10 @@ level-1 books and produces max-level books; those two rungs are the only ones a 
 strategy actually trades. Measured against a live hour, of 774 book tags:
 
 | Level position | Tags | % unit volume | % coin turnover | Avg price |
-|---|---|---|---|---|
-| Lowest | 143 | 72.3% | 70.1% | 2.8M |
-| **Max** | 143 | 4.6% | **21.0%** | 20.0M |
-| Intermediate | 476 | 22.9% | 7.9% | 2.0M |
+| -------------- | ---- | ------------- | --------------- | --------- |
+| Lowest         | 143  | 72.3%         | 70.1%           | 2.8M      |
+| **Max**        | 143  | 4.6%          | **21.0%**       | 20.0M     |
+| Intermediate   | 476  | 22.9%         | 7.9%            | 2.0M      |
 
 Level-1 + max is **91% of book coin turnover in 286 of 774 tags**. Rank books by unit
 volume and you will wrongly drop the max-level rung — it is 4.6% of units but 21% of
@@ -109,7 +110,7 @@ Intermediate levels stay Tier B unless they earn a slot on volume like anything 
 On Workers Paid this is a choice, not a constraint — full 5-minute coverage of all 2,136
 products is ~18.5M rows/month written against the 50M included, and with a 30-day cap it
 now fits on storage too. We tier anyway because five-minute resolution on an item nobody
-trades has no analytical value, and 43% of book tags have *zero* weekly volume. Keep
+trades has no analytical value, and 43% of book tags have _zero_ weekly volume. Keep
 roughly half the write budget free for backfills, reprocessing, and schema migrations.
 
 The reason we still fetch all 2,136 products: Hypixel returns them in one response and
@@ -129,10 +130,10 @@ build our own history database from it and stop depending on anyone else's.
 
 ### Where each upstream is allowed to appear
 
-| Upstream | Allowed in | Forbidden in |
-|---|---|---|
-| `api.hypixel.net/v2/skyblock/bazaar` | `scheduled` handler only | `fetch` handler, client |
-| `sky.coflnet.com/api/...` | `scripts/backfill.ts` (local Node) only | Worker, client |
+| Upstream                             | Allowed in                              | Forbidden in            |
+| ------------------------------------ | --------------------------------------- | ----------------------- |
+| `api.hypixel.net/v2/skyblock/bazaar` | `scheduled` handler only                | `fetch` handler, client |
+| `sky.coflnet.com/api/...`            | `scripts/backfill.ts` (local Node) only | Worker, client          |
 
 ---
 
@@ -150,7 +151,7 @@ Verified against Cloudflare docs; re-check before assuming.
   parameters cap at **100 per query** regardless of plan, so chunk by parameter count,
   not row count, and use `db.batch()`.
 - **Nothing is kept longer than 30 days.** This is a product decision, not a storage
-  workaround: the site exists to compute a *trailing* weekly high/low band (§8), and a
+  workaround: the site exists to compute a _trailing_ weekly high/low band (§8), and a
   price from six weeks ago is not evidence about next week's band. Every table and the R2
   archive prune to 30 days, so the whole system reaches a steady state and stays there.
   The direct consequences, which you must not quietly undo:
@@ -173,7 +174,7 @@ Verified against Cloudflare docs; re-check before assuming.
   - **Total ≈ 538 MB and flat**, about 5% of the 10 GB cap, with ~16.8M rows/month written
     including deletes against the 50M included (~34%).
   - Untiered 5-min coverage of all 2,136 products would be 617 MB at 7-day retention —
-    which now *fits*. The storage argument for tiering has evaporated; the write-budget
+    which now _fits_. The storage argument for tiering has evaporated; the write-budget
     and signal-quality arguments in §2 are what remain.
 - **Deletes count as rows written.** Pruning is not free — budget deletes alongside
   inserts when checking against the 50M/month included.
@@ -207,7 +208,7 @@ Verified against Cloudflare docs; re-check before assuming.
   SQLite file under `.wrangler/state/`. Migrations must be applied to both. Applying only
   locally and wondering why production has no tables is the single most common mistake here.
 - **KV writes** are limited and eventually consistent (~60s global propagation). KV holds
-  *precomputed* payloads written by cron, never per-request writes.
+  _precomputed_ payloads written by cron, never per-request writes.
 - **Cron triggers** have no wall-duration limit on paid, but do not assume unlimited CPU.
   Split the work across separate cron expressions and branch on `event.cron`.
 
@@ -306,7 +307,7 @@ function needs data, it takes it as an argument.
     indexes that appeared in no migration until `0007` reconciled them; untracked drift in
     that direction is the same failure as editing a migration, just harder to see.
   - One deliberate exception exists (ADR-024: `0004`/`0005` emptied). Not a precedent — the
-    bar was "provably dead *and* breaks every new database", not "inconvenient".
+    bar was "provably dead _and_ breaks every new database", not "inconvenient".
 
 ## 6. Commands
 
@@ -338,10 +339,10 @@ any projection in this file.
    and open source clears the first only. Practical consequences that bind today:
    - Poll no faster than the bazaar actually refreshes (~60s). Five minutes is our choice.
    - Never expose an endpoint that mirrors an upstream response shape. Our API serves
-     *our* computed results.
+     _our_ computed results.
    - Any published dataset ships as aggregates, never a verbatim re-emission (see
      ROADMAP Phase 8).
-   The penalty for getting this wrong is losing API access, which ends the project.
+     The penalty for getting this wrong is losing API access, which ends the project.
 4. **No secrets in the client bundle.** Any Coflnet account token lives in `.dev.vars`
    locally and Worker secrets in prod. The client calls only `/api/*`.
 5. **No user accounts in v1.** Watchlists go in `localStorage`. Adding auth means handling
@@ -363,7 +364,7 @@ any projection in this file.
   constant.
 - Super Compactor 3000 in minions auto-crafts enchanted forms and dumps them in
   continuously. That supply is price-insensitive, so popular materials frequently trade
-  *below* 160× base. Real craft spreads are typically 1–5%, not 30%. **If the scan shows a
+  _below_ 160× base. Real craft spreads are typically 1–5%, not 30%. **If the scan shows a
   200% margin, the recipe is wrong, the item is dead, or someone is walling it.** Rank by
   profit-per-day, never by margin.
 - Collection-level gating means a profitable craft may be unavailable to a given player.
@@ -380,12 +381,12 @@ What makes this genuinely different from 160:1 compaction, and why it is not jus
 `recipes` row:
 
 - **The ratio is a power of two, not a constant**, and every rung in between is itself a
-  tradeable bazaar item. You may enter the chain at *any* level, so the model must pick
+  tradeable bazaar item. You may enter the chain at _any_ level, so the model must pick
   the cheapest entry: `min over L < M of (2^(M-L) × price(L))`. Buying 16 level-3 books is
   frequently cheaper than 64 level-1 books. A single flat `ratio` column cannot express
   this — the search over entry levels is the feature.
 - **This is the same machinery tier-2 compaction needs.** `SUGAR_CANE → ENCHANTED_SUGAR →
-  ENCHANTED_SUGAR_CANE` is a two-step path priced exactly the same way. Build one
+ENCHANTED_SUGAR_CANE` is a two-step path priced exactly the same way. Build one
   cheapest-path solver in `convert.ts` and both craft types use it; building anvil logic
   separately means fixing the same bug twice.
 - **Fill feasibility dominates here.** Max-level books are 21% of book coin turnover but
@@ -394,17 +395,18 @@ What makes this genuinely different from 160:1 compaction, and why it is not jus
   millions against a few thousand for enchanted materials.
 - **Not every level is reachable by merging, and the price says which.** Many top rungs are
   obtainable only from elsewhere in the game — a minigame reward, a specific drop —
-  *not* from an anvil. `ENCHANTMENT_LOOTING_5` is the reference case: Looting IV asks
+  _not_ from an anvil. `ENCHANTMENT_LOOTING_5` is the reference case: Looting IV asks
   50,000 and Looting V asks 172,816,195. Two Looting IV books do not make a Looting V, so
   the "1,509% margin" that produced is a trade nobody can execute.
 
   **An insanely high margin on a merge is evidence the merge does not exist**, not evidence
-  of a bargain. The detector is the *implied merge ratio*,
+  of a bargain. The detector is the _implied merge ratio_,
   `price(N+1) / (2 × price(N))`: sharply bimodal across the 320 priced edges, with real
   merges under 1.5 and gated rungs in the tail past 3. `detectMergeGates` withholds edges
   above 3 — the same 200%-margin suspicion line, applied to a chain — so the family
   re-targets the highest rung a merge can reach. 45 of 320 are gated. An edge whose ratio
   cannot be computed stays usable: absence of evidence is not evidence of a gate. ADR-025.
+
 - Ratios still cannot be validated automatically (the rule at the top of this section
   applies with more force, not less) — every anvil recipe carries `verified` and starts at
   `false`. The gate heuristic narrows the damage; it does not replace verification.
@@ -428,7 +430,7 @@ section's caveat in full: it is the realistic case **conditional on both orders 
   a healthy sample). Make the percentile a user input, not a constant.
 - **Always ship the hit-rate.** By construction a p10 buy order sits unfilled ~90% of the
   time. The band is only a trade if price actually visits it, so report how many hours in
-  the window touched each band, and how often *both* were touched in the same week.
+  the window touched each band, and how often _both_ were touched in the same week.
   Non-negotiable #6 covers this.
 - **Beware small n on the weekly view.** The band itself rests on 168 hourly rows, but
   "how many weeks did this hold" rests on **4** — the 30-day cap allows no more. Report the

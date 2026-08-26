@@ -5,11 +5,10 @@ import {
   DEFAULT_HIGH_PERCENTILE,
   DEFAULT_LOW_PERCENTILE,
   DEFAULT_WINDOW_DAYS,
+  type BandScanRow,
   type Bar,
-  type BandEconomics,
   type BandMarket,
   type RawHourlyRow,
-  type WeeklyBand,
 } from "@core/index.js";
 import type { Env } from "./index.js";
 
@@ -54,11 +53,9 @@ export const DEFAULT_BAND_SCAN_PARAMS: BandScanParams = {
   market: { sellTaxRate: 0.0125, captureFraction: 0.2 },
 };
 
-export interface BandScanRow {
-  readonly tag: string;
-  readonly band: WeeklyBand;
-  readonly economics: BandEconomics;
-}
+/** Shape declared in packages/core/src/wire.ts: `/api/bands` serves these rows and the
+ *  band table renders them, so the client imports the same type. */
+export type { BandScanRow };
 
 export interface BandScanResult {
   readonly rows: readonly BandScanRow[];

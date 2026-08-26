@@ -45,7 +45,11 @@ describe("handleCraft — stale data", () => {
       ],
     });
 
-    const res = await handleCraft("COAL", new URL("https://bazaar.example/api/craft/COAL"), makeFakeEnv({ db }));
+    const res = await handleCraft(
+      "COAL",
+      new URL("https://bazaar.example/api/craft/COAL"),
+      makeFakeEnv({ db }),
+    );
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as {
@@ -61,7 +65,11 @@ describe("handleCraft — stale data", () => {
 
   it("returns 404 for a base tag with no recipe at all", async () => {
     const db = makeQueuedFakeD1({ all: [[]] }); // selectRecipesByBaseTag finds nothing
-    const res = await handleCraft("NOT_A_TAG", new URL("https://bazaar.example/api/craft/NOT_A_TAG"), makeFakeEnv({ db }));
+    const res = await handleCraft(
+      "NOT_A_TAG",
+      new URL("https://bazaar.example/api/craft/NOT_A_TAG"),
+      makeFakeEnv({ db }),
+    );
     expect(res.status).toBe(404);
   });
 });

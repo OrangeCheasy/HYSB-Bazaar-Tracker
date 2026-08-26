@@ -155,6 +155,7 @@ export type {
   BandScanRow,
   ChartPoint,
   CraftRow,
+  EntryRung,
   Envelope,
   ErrorEnvelope,
   HealthPayload,

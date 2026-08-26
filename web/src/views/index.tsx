@@ -7,37 +7,6 @@ import { Placeholder } from "./Placeholder.js";
  * band never without its hit-rate (CLAUDE.md §7.6, ROADMAP Phase 5).
  */
 
-export function BandDetailView(): React.JSX.Element {
-  const { tag } = useParams();
-  return (
-    <Placeholder title="Band" subject={tag}>
-      <p>
-        Price over the trailing window with both bands drawn as horizontal lines, so &ldquo;how
-        often did price touch this&rdquo; is answered visually rather than asserted.
-      </p>
-      <p>
-        Week count is stated plainly. Nothing here rests on more than four weeks — the whole
-        dataset is a rolling 30 days.
-      </p>
-    </Placeholder>
-  );
-}
-
-export function CraftDetailView(): React.JSX.Element {
-  const { baseTag } = useParams();
-  return (
-    <Placeholder title="Craft" subject={baseTag}>
-      <p>
-        Three scenarios side by side, price chart with the buy and sell windows shaded, the
-        hour-of-day profile, and each warning flag explained in plain language.
-      </p>
-      <p>
-        For anvil merges: the chosen entry level, and what the alternatives would have cost.
-      </p>
-    </Placeholder>
-  );
-}
-
 export function ItemsView(): React.JSX.Element {
   return (
     <Placeholder title="Items">

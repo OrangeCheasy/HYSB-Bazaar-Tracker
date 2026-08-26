@@ -54,7 +54,7 @@ const RECIPE: Column<ScanRow> = {
   render: (row) => (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <Link
-        to={`/craft/${encodeURIComponent(row.recipe.baseTag)}`}
+        to={`/craft/${encodeURIComponent(row.kind === "anvil" ? row.recipe.enchTag : row.recipe.baseTag)}`}
         title={
           row.recipe.verified
             ? row.recipe.enchTag

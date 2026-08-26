@@ -338,7 +338,7 @@ export function isDefaultScanParams(
  * rungs are Tier B and have no five-minute rows, so `snapshots` would silently return
  * nothing for exactly the levels the entry search exists to consider.
  */
-async function fetchBookAskPrices(
+export async function fetchBookAskPrices(
   db: Pick<D1Database, "prepare">,
 ): Promise<Map<string, number>> {
   const { results } = await db
@@ -470,6 +470,6 @@ export async function runAnvilScan(
  * arithmetic rather than a guess does not make the CHAIN verified, because whether every
  * rung really merges is the unverified part.
  */
-function anvilRecipeShell(baseTag: string, enchTag: string, ratio: number): Recipe {
+export function anvilRecipeShell(baseTag: string, enchTag: string, ratio: number): Recipe {
   return { id: null, baseTag, enchTag, ratio, verified: false, note: null };
 }

@@ -66,11 +66,43 @@ export interface ScanRow {
   readonly plan?: ConversionPlan;
 }
 
-/** GET /api/craft/:baseTag — one entry per recipe keyed on that base tag. */
+/**
+ * One rung of an enchant family, priced as an entry point into the merge chain.
+ *
+ * The entry-level search is the whole feature of the anvil solver (CLAUDE.md §8:
+ * `min over L < M of (2^(M-L) × price(L))`), and buying 16 level-3 books is frequently
+ * cheaper than 64 level-1 books. Returning only the winner asserts the choice; returning
+ * the ladder lets a reader check it, which is the difference between a recommendation and
+ * a black box.
+ */
+export interface EntryRung {
+  readonly tag: string;
+  readonly level: number;
+  /** Market ask for one book at this rung. Null when the rung is unpriced — a real state
+   *  for thin intermediate levels, and NOT the same as free. */
+  readonly price: number | null;
+  /** `2^(target - level)` books of this rung per one finished book. */
+  readonly unitsRequired: number;
+  /** `price × unitsRequired`, or null when the rung is unpriced. */
+  readonly totalCost: number | null;
+  /** True for the rung the solver actually chose. */
+  readonly chosen: boolean;
+  /** Set when this rung cannot be merged upward — the market says the conversion does not
+   *  exist (ADR-025), so its apparent cost is not reachable. */
+  readonly gatedAbove?: boolean;
+}
+
+/** GET /api/craft/:tag — one entry per recipe on that tag. */
 export interface CraftRow {
   readonly recipe: Recipe;
   readonly analysis?: CraftAnalysis;
   readonly error?: string;
+  /** Which craft type this row describes. Absent on rows from before this field existed. */
+  readonly kind?: RecipeKind;
+  /** Anvil only: the route the solver chose, with its steps. */
+  readonly plan?: ConversionPlan;
+  /** Anvil only: every rung below the target, priced. The chosen one is marked. */
+  readonly ladder?: readonly EntryRung[];
 }
 
 /** One row of the ranked band scan. */

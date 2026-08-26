@@ -2,13 +2,9 @@ import { createBrowserRouter } from "react-router";
 import { Layout } from "./app/Layout.js";
 import { BandsView } from "./views/BandsView.js";
 import { ScanView } from "./views/ScanView.js";
-import {
-  BandDetailView,
-  CraftDetailView,
-  ItemDetailView,
-  ItemsView,
-  NotFoundView,
-} from "./views/index.js";
+import { BandDetailView } from "./views/BandDetailView.js";
+import { CraftDetailView } from "./views/CraftDetailView.js";
+import { ItemDetailView, ItemsView, NotFoundView } from "./views/index.js";
 
 /**
  * Routes.

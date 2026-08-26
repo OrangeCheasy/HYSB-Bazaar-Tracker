@@ -175,8 +175,30 @@ existing check (ADR-032). And the ESLint boundary this phase asks for had to be 
 `src/**` alone: flat config replaces rather than merges a repeated rule, so a block naming
 core and web too would have quietly deleted their platform-free boundaries.
 
-**Remaining:** run it against production (`npm run backfill -- --remote`, ~69 minutes) and
-spot-check a few tags. Until that happens the Definition of Done below is unmet.
+**Production run completed 2026-08-26, 1h 18m.** 465,550 rows landed across 707 tags, and
+**686 tags now have ≥120 hourly rows in the trailing 7 days** — enough to compute a weekly
+band, against zero the day before. The handoff is clean: Coflnet's newest row is
+`2026-08-25 21:00`, our own ingest's oldest is `2026-08-25 22:00` — contiguous, no overlap,
+no gap. D1 is at 97 MB, ~1% of the cap.
+
+The audit reported no gaps, which is true but not yet informative: our own collection was
+~23 hours old, so there was almost nothing to compare against. That check earns its keep
+in a week or two, not today.
+
+The run also reported `6,835 malformed buckets rejected`, which was a mislabel, not a
+fault — thin books at the 0.1 floor where Coflnet omits a zero-valued price. Diagnosed and
+fixed the same day (ADR-031); the rejection was correct, its description was not. No
+re-run needed, and none was done.
+
+**Still open:**
+
+- **The Done-when below cannot be met as written.** 86 Tier A tags have no Coflnet history
+  at all — every one an `ENCHANTMENT_*` book — and 14 more kept under half their buckets.
+  That is an upstream fact, not a defect, so the clause needs amending rather than chasing.
+- A separate bug surfaced while verifying this and belongs to the **ingest** path, not the
+  backfill: 9,324 `source='hypixel'` rows across 563 tags carry a zero price, and
+  `computeBand` applies no zero filter. For **11 of 706** band-eligible tags the p10 buy
+  band is therefore 0, and `spreadPct` divides by it. Not caused by Phase 3; found by it.
 
 **The 30-day cap changed what this phase is for, and bounded it.** Backfilling further
 than 30 days is now actively pointless — the next nightly prune deletes it. So the ceiling

@@ -31,7 +31,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { normalizeCoflnetPoint, type Bar, type RawCoflnetPoint } from "@hysb/core";
+import {
+  normalizeCoflnetPoint,
+  type Bar,
+  type NormalizeError,
+  type RawCoflnetPoint,
+} from "@hysb/core";
 
 const execFileAsync = promisify(execFile);
 
@@ -486,12 +491,36 @@ interface HourlyRow {
   readonly bar: Bar;
 }
 
+/**
+ * Skipped buckets counted by reason, never as one lump.
+ *
+ * The first production run reported "6,835 malformed buckets rejected" and sent someone
+ * looking for a parser bug. They were not malformed: 6,835 of them were `empty-side` —
+ * items trading at the 0.1 floor where Coflnet rounds a side to zero and omits the field
+ * (ADR-031). A routine thin book and genuinely corrupt data need to read differently or
+ * the number is worse than not printing it.
+ */
+type RejectTally = Partial<Record<NormalizeError, number>>;
+
+/** Reasons that mean "this bucket was unusable", as opposed to "this data is wrong". */
+const BENIGN_REJECTIONS: ReadonlySet<NormalizeError> = new Set<NormalizeError>(["empty-side"]);
+
+function tallyTotal(tally: RejectTally): number {
+  return Object.values(tally).reduce((n, v) => n + v, 0);
+}
+
+function suspectTotal(tally: RejectTally): number {
+  return Object.entries(tally)
+    .filter(([reason]) => !BENIGN_REJECTIONS.has(reason as NormalizeError))
+    .reduce((n, [, v]) => n + v, 0);
+}
+
 interface TagSeries {
   readonly rows: readonly HourlyRow[];
   /** Every hour Coflnet actually covers. The denominator for the gap audit. */
   readonly covered: ReadonlySet<number>;
   readonly bucketCount: number;
-  readonly rejected: number;
+  readonly rejected: RejectTally;
   readonly resolutionHours: number;
 }
 
@@ -510,12 +539,12 @@ function buildSeries(
   windowEnd: number,
 ): TagSeries {
   const bars: Bar[] = [];
-  let rejected = 0;
+  const rejected: RejectTally = {};
 
   for (const point of points) {
     const result = normalizeCoflnetPoint(point, HOUR);
     if (result.ok) bars.push(result.value);
-    else rejected++;
+    else rejected[result.error] = (rejected[result.error] ?? 0) + 1;
   }
 
   bars.sort((a, b) => a.ts - b.ts);
@@ -591,7 +620,7 @@ function insertStatement(rows: readonly HourlyRow[]): string {
 interface TagReport {
   readonly buckets: number;
   readonly rowsOffered: number;
-  readonly rejected: number;
+  readonly rejected: RejectTally;
   readonly resolutionHours: number;
   /** Hours Coflnet has, we do not, and we were already collecting. Real holes. */
   readonly gapHours: readonly number[];
@@ -600,7 +629,7 @@ interface TagReport {
 }
 
 interface State {
-  readonly version: 1;
+  readonly version: 2;
   readonly target: Target;
   readonly days: number;
   readonly selection: string;
@@ -610,7 +639,7 @@ interface State {
 
 function loadState(opts: Options, target: Target, selection: string): State {
   const fresh: State = {
-    version: 1,
+    version: 2,
     target,
     days: opts.days,
     selection,
@@ -622,7 +651,7 @@ function loadState(opts: Options, target: Target, selection: string): State {
   try {
     const saved = JSON.parse(readFileSync(STATE_PATH, "utf8")) as State;
     const compatible =
-      saved.version === 1 &&
+      saved.version === 2 &&
       saved.target === target &&
       saved.days === opts.days &&
       saved.selection === selection;
@@ -669,6 +698,69 @@ function summarise(hours: readonly number[], limit = 6): string {
   return hours.length > limit
     ? `${shown.join(" ")} +${hours.length - limit} more`
     : shown.join(" ");
+}
+
+/** Plain-English reason text, so nobody has to look up an error code to read the report. */
+const REJECTION_EXPLANATIONS: Record<NormalizeError, string> = {
+  "empty-side":
+    "one side of the book had no price — routine for items at the 0.1 floor,\n" +
+    "              where Coflnet rounds a side to zero and omits the field. Kept out because\n" +
+    "              a zero bid would drag the weekly band's p10 to a price no order can use.",
+  "non-finite": "a price was NaN or Infinity — genuinely bad data, worth investigating.",
+  "negative-price": "a negative price — genuinely bad data, worth investigating.",
+  "crossed-book": "ask below bid after derivation — should be impossible; investigate.",
+  "missing-field": "the timestamp could not be parsed — investigate.",
+};
+
+/**
+ * Skipped buckets, broken out by reason and separated into benign and suspect.
+ *
+ * The first production run printed one number — "6,835 malformed buckets rejected" — and
+ * it read as a data-quality emergency. Every one of them was a thin book. A single total
+ * is actively misleading here, so there isn't one.
+ */
+function reportSkipped(done: Record<string, TagReport>): void {
+  const totals: RejectTally = {};
+  for (const report of Object.values(done)) {
+    for (const [reason, n] of Object.entries(report.rejected)) {
+      const key = reason as NormalizeError;
+      totals[key] = (totals[key] ?? 0) + n;
+    }
+  }
+
+  const total = tallyTotal(totals);
+  if (total === 0) return;
+
+  const suspect = suspectTotal(totals);
+  console.log(
+    `\n${total.toLocaleString()} buckets skipped ` +
+      `(${suspect === 0 ? "none" : suspect.toLocaleString()} of them worth a second look):`,
+  );
+  for (const [reason, n] of Object.entries(totals).sort((a, b) => b[1] - a[1])) {
+    const key = reason as NormalizeError;
+    const flag = BENIGN_REJECTIONS.has(key) ? " " : "!";
+    console.log(`  ${flag} ${String(n).padStart(6)}  ${key} — ${REJECTION_EXPLANATIONS[key]}`);
+  }
+
+  // A tag that lost most of its history is worth naming even when the reason is benign:
+  // it means that tag's band rests on very little, whatever the cause.
+  const thin = Object.entries(done)
+    .map(([tag, r]) => [tag, r, tallyTotal(r.rejected)] as const)
+    .filter(([, r, skipped]) => skipped > 0 && skipped >= r.buckets)
+    .sort((a, b) => b[2] - a[2]);
+
+  if (thin.length > 0) {
+    console.log(
+      `\n  ${thin.length} ${thin.length === 1 ? "tag" : "tags"} lost half or more of their buckets. Their bands will rest on\n` +
+        `  thin data regardless of the reason — treat any band on these with suspicion:`,
+    );
+    for (const [tag, r, skipped] of thin.slice(0, 10)) {
+      console.log(
+        `    ${tag.padEnd(38)} kept ${String(r.buckets).padStart(4)} of ${skipped + r.buckets}`,
+      );
+    }
+    if (thin.length > 10) console.log(`    ... and ${thin.length - 10} more`);
+  }
 }
 
 function reportGaps(done: Record<string, TagReport>): void {
@@ -863,12 +955,10 @@ async function main(): Promise<void> {
   await flushAndSave();
   process.stdout.write("\n");
 
-  const rejected = Object.values(state.done).reduce((n, r) => n + r.rejected, 0);
   console.log(
     `\ndone in ${formatDuration(Date.now() - startedAt)} — ` +
       `${written.toLocaleString()} rows offered to ${target.slice(2)} D1` +
-      `${opts.auditOnly ? " (audit-only: nothing written)" : ""}` +
-      `${rejected > 0 ? `, ${rejected} malformed buckets rejected` : ""}`,
+      `${opts.auditOnly ? " (audit-only: nothing written)" : ""}`,
   );
   if (!opts.auditOnly) {
     console.log(
@@ -877,6 +967,7 @@ async function main(): Promise<void> {
     );
   }
 
+  reportSkipped(state.done);
   reportGaps(state.done);
 }
 

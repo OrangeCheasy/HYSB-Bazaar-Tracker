@@ -952,6 +952,29 @@ that the hour rests on one coarse third-party observation rather than twelve of 
 and it is what §3b's "`hourly.samples` must be honest" requires — the rule forbids
 inflating the count, not recording a real observation of one.
 
+**3. A side priced at zero is rejected, and says so.** Added 2026-08-26 after the first
+production run. Coflnet omits a field whose value is zero — default-value JSON
+serialization — and rounds prices to one decimal, so an item trading at the 0.1 floor
+sends buckets with no `sell` key at all. `RawCoflnetPoint` declared `buy`/`sell` as
+required `number`, so those arrived as `undefined`, failed `Number.isFinite`, and were
+counted as **"malformed"**. The run reported `6,835 malformed buckets rejected` across 351
+tags and read as a data-quality emergency; every one of them was an ordinary thin book.
+
+The rejection itself was right and is kept. The weekly band takes p10 of `bid_avg` to
+place a buy order (CLAUDE.md §8); admitting bars with `bid = 0` would drag that percentile
+toward zero and have the site recommend an order at a price no order can be placed at.
+Skipping a bucket loses one hour, keeping it corrupts the band. What changed is that
+`empty-side` is now its own `NormalizeError`, the type admits the fields are optional, and
+the report separates benign skips from suspect ones instead of printing one total — a
+number that made a routine condition look like corruption was worse than no number.
+
+One behaviour did change: an **explicit** `0` was previously accepted, being finite and
+non-negative, and would have written a zero-priced row. Production held none, because
+Coflnet omits rather than sends zeros — but the hole was real and is now closed.
+
+Rejecting on price zero is not rejecting on "cheap": 0.1 is the bazaar floor and a
+legitimate bid, and a test pins that it still normalizes.
+
 **The audit is scoped to `source = 'hypixel'`.** A gap is an hour Coflnet has and _our own
 ingest_ does not. Counting a previous backfill's rows as coverage would make the second
 run report a clean bill of health for exactly the hours the first run papered over, which

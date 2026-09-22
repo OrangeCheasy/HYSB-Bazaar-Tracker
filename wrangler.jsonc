@@ -20,12 +20,9 @@
     "enabled": true,
   },
   "triggers": {
-    // Kept in sync by hand with the CRON_* constants in src/worker/index.ts.
-    "crons": [
-      "*/5 * * * *", // ingest
-      "7 * * * *", // hourly rollup + precompute
-      "23 4 * * *", // daily rollup + prune
-    ],
+    // Temporarily disabled to stop D1 writes while usage is over budget.
+    // Restore the three schedules when ingestion is intentionally resumed.
+    "crons": [],
   },
   "d1_databases": [
     {
